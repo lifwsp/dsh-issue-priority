@@ -112,7 +112,11 @@ window.__ModuleLoader__.load({
 				case "similar-text": return "";
 				case "hard-dependency": return "#" + r.issue + " は #" + r.dependsOn + " の後";
 				case "advisory-order": return "#" + r.before + " → #" + r.after + " の順がよさそう";
-				case "priority": return "#" + r.issue + " の重要度が" + PRIO[r.level] + "（" + (r.source === "label" ? "ラベル" : "判定モデル") + "）";
+				case "priority": return "#" + r.issue + " の重要度が" + PRIO[r.level] + "（" + (r.source === "github" ? "GitHub の Priority" : r.source === "label" ? "ラベル" : "判定モデル") + "）";
+				case "same-parent": return "#" + r.issues[0] + " と #" + r.issues[1] + " は同じ親 Issue #" + r.parent + " のサブ Issue";
+				case "same-milestone": return "#" + r.issues[0] + " と #" + r.issues[1] + " は同じマイルストーン「" + r.milestone + "」";
+				case "aging": return "#" + r.issue + " は起票から " + r.days + " 日経過（先送り防止で繰り上げ）";
+				case "due": return r.days < 0 ? "#" + r.issue + " のマイルストーン期限切れ" : "#" + r.issue + " のマイルストーン期限まで " + r.days + " 日";
 				case "unblocks": return "終わると " + r.count + " 個のパッケージが着手できるようになる";
 				case "pinned": return "#" + r.issue + " を優先に指定";
 				case "deferred": return "#" + r.issue + " を後回しに指定";
@@ -153,6 +157,7 @@ window.__ModuleLoader__.load({
 			details.push("判定モデルへの質問 累計 " + view.usage.questions + " 問");
 			if (s && s.open > 0) details.push("dsh-plan ブロック付き " + s.withBlock + " / " + s.open + " 件");
 			if (plan.decision.note && !/error/i.test(plan.decision.note)) details.push(plan.decision.note);
+			if (view.outcomes) details.push("計画の採用状況: " + view.outcomes);
 			return { alerts: alerts, details: details };
 		}
 

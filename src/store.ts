@@ -5,6 +5,7 @@
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import type { PlanOutcome } from './outcomes.js'
 import type { Dismissal, FinishedMark } from './progress.js'
 import type { IssueRecord, LocalDependency, LocalScan, Override, Plan, StoredPull, UsageTotals } from './types.js'
 
@@ -36,6 +37,8 @@ export interface RepoState {
   judgments: Record<string, { value: unknown; at: string }>
   plan: Plan | null
   usage: UsageTotals & { since: string }
+  /** What happened to the recommendations (adopted / reordered / regrouped / split), capped. */
+  outcomes: PlanOutcome[]
 }
 
 export function defaultDataDir(): string {
@@ -67,6 +70,7 @@ export function emptyState(repo: string, now = new Date()): RepoState {
     judgments: {},
     plan: null,
     usage: { requests: 0, questions: 0, inputTokens: 0, since: now.toISOString() },
+    outcomes: [],
   }
 }
 

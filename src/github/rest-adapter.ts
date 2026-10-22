@@ -7,9 +7,10 @@ import {
   type ListIssuesSinceOptions,
   type ListPullsOptions,
 } from './adapter.js'
+import type { NativeMeta } from '../types.js'
 
 const DEFAULT_API_BASE = 'https://api.github.com'
-const USER_AGENT = 'dsh-issue-priority/0.5.0'
+const USER_AGENT = 'dsh-work-planner/0.6.0'
 const RETRYABLE = new Set([403, 429])
 
 export interface RestGitHubAdapterOptions {
@@ -38,6 +39,36 @@ interface GhIssueRaw {
   state: string
   closed_at?: string | null
   issue_dependencies_summary?: { blocked_by?: number; total_blocked_by?: number; blocking?: number }
+  sub_issues_summary?: { total?: number; completed?: number }
+  parent_issue_url?: string | null
+  issue_field_values?: GhFieldValueRaw[]
+}
+
+interface GhFieldValueRaw {
+  issue_field_name?: string
+  data_type?: string
+  value?: unknown
+  single_select_option?: { name?: string } | null
+}
+
+/** GitHub-native planning metadata from one list item (pure; no request). */
+export function nativeMeta(raw: Pick<GhIssueRaw, 'milestone' | 'sub_issues_summary' | 'parent_issue_url' | 'issue_field_values' | 'url'>): NativeMeta | undefined {
+  const out: NativeMeta = {}
+  for (const f of raw.issue_field_values ?? []) {
+    const name = f.issue_field_name?.trim().toLowerCase()
+    const value = f.single_select_option?.name ?? (typeof f.value === 'string' || typeof f.value === 'number' ? f.value : undefined)
+    if (value === undefined || value === '') continue
+    if (name === 'priority') out.priority = String(value)
+    else if (name === 'effort' || name === 'size' || name === 'estimate') out.effort = value
+  }
+  // Same-repo parents only: `.../repos/{owner}/{repo}/issues/{n}`.
+  const parent = raw.parent_issue_url?.match(/\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/)
+  const self = raw.url?.match(/\/repos\/([^/]+\/[^/]+)\/issues\/\d+$/)
+  if (parent && (!self || self[1]!.toLowerCase() === parent[1]!.toLowerCase())) out.parent = Number(parent[2])
+  const total = raw.sub_issues_summary?.total ?? 0
+  if (total > 0) out.subIssues = { total, completed: raw.sub_issues_summary?.completed ?? 0 }
+  if (raw.milestone?.title) out.milestone = { title: raw.milestone.title, ...(raw.milestone.due_on ? { dueOn: raw.milestone.due_on } : {}) }
+  return Object.keys(out).length ? out : undefined
 }
 
 interface GhDependencyRaw {
@@ -199,6 +230,10 @@ export class RestGitHubAdapter implements GitHubIssueSource {
         closedAt: raw.closed_at ?? null,
         nativeBlockedBy,
         comments,
+        ...(() => {
+          const native = nativeMeta(raw)
+          return native ? { native } : {}
+        })(),
       } satisfies FetchedIssue
     })
   }

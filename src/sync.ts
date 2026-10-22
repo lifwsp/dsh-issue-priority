@@ -29,6 +29,7 @@ export interface SyncSettings {
   directionThreshold: number
   similarityThreshold?: number
   maxPackageSize: number
+  agingDays?: number
 }
 
 export interface SyncDeps {
@@ -138,6 +139,7 @@ export function toIssueRecord(raw: FetchedIssue): IssueRecord {
     thread,
     ...(raw.author ? { author: raw.author } : {}),
     ...(raw.createdAt ? { createdAt: raw.createdAt } : {}),
+    ...(raw.native ? { native: raw.native } : {}),
   }
 }
 
@@ -259,6 +261,7 @@ export class SyncService {
       directionThreshold: settings.directionThreshold,
       ...(settings.similarityThreshold !== undefined ? { similarityThreshold: settings.similarityThreshold } : {}),
       maxPackageSize: settings.maxPackageSize,
+      agingDays: settings.agingDays,
       maxQuestions: settings.maxQuestionsPerSync,
       now: this.now,
       signal,

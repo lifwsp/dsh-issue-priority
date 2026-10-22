@@ -1,3 +1,5 @@
+import type { NativeMeta } from '../types.js'
+
 /** One issue comment, oldest first. */
 export interface IssueComment {
   author: string
@@ -23,6 +25,8 @@ export interface FetchedIssue {
   nativeBlockedBy: number[]
   /** Comments, oldest first (only fetched when the issue has comments). */
   comments: IssueComment[]
+  /** GitHub-native planning metadata read from the list payload (no extra request). */
+  native?: NativeMeta
 }
 
 export interface ListIssuesSinceOptions {

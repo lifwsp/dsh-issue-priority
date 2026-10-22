@@ -2,7 +2,8 @@
 import { randomUUID } from 'node:crypto'
 import { describeEvidence, describeStep, STEP_LABEL } from './progress.js'
 import type { RepoState } from './store.js'
-import type { IssueRecord, Plan, Rationale, WorkPackage } from './types.js'
+import { describeOutcomes, summarizeOutcomes } from './outcomes.js'
+import type { IssueRecord, Plan, PrioritySource, Rationale, WorkPackage } from './types.js'
 
 const STATUS_LABEL: Record<WorkPackage['status'], string> = {
   ready: '着手可',
@@ -12,6 +13,13 @@ const STATUS_LABEL: Record<WorkPackage['status'], string> = {
 }
 
 export const PRIORITY_LABEL = { high: '高', medium: '中', low: '低' } as const
+
+const PRIORITY_SOURCE_LABEL: Record<PrioritySource, string> = {
+  github: 'GitHub の Priority フィールド',
+  label: 'ラベル',
+  decision: '判定モデル',
+  default: '既定値',
+}
 
 function issueLabel(issues: Record<string, IssueRecord>, n: number): string {
   const i = issues[String(n)]
@@ -33,7 +41,17 @@ export function describeRationale(r: Rationale): string {
     case 'similar-text':
       return `#${r.issues[0]} と #${r.issues[1]} の内容が近い (類似度 ${r.similarity.toFixed(2)})`
     case 'priority':
-      return `#${r.issue} の重要度は${PRIORITY_LABEL[r.level]} (${r.source === 'label' ? 'ラベル' : '判定モデル'})`
+      return `#${r.issue} の重要度は${PRIORITY_LABEL[r.level]} (${PRIORITY_SOURCE_LABEL[r.source]})`
+    case 'same-parent':
+      return `#${r.issues[0]} と #${r.issues[1]} は同じ親 Issue #${r.parent} のサブ Issue`
+    case 'same-milestone':
+      return `#${r.issues[0]} と #${r.issues[1]} は同じマイルストーン「${r.milestone}」`
+    case 'aging':
+      return `#${r.issue} は起票から ${r.days} 日経過（先送りを防ぐため繰り上げ）`
+    case 'due':
+      return r.days < 0
+        ? `#${r.issue} のマイルストーン「${r.milestone}」は期限切れ（${r.dueOn.slice(0, 10)}）`
+        : `#${r.issue} のマイルストーン「${r.milestone}」の期限まで ${r.days} 日`
     case 'unblocks':
       return `終わると ${r.count} 個のパッケージが着手可能になる`
     case 'pinned':
@@ -101,6 +119,8 @@ export function renderPlan(state: RepoState, plan: Plan, options: { limit?: numb
     lines.push('', '警告:')
     for (const w of plan.warnings.slice(0, 10)) lines.push(`   - #${w.issue} ${w.kind}: ${w.detail}`)
   }
+  const outcomes = describeOutcomes(summarizeOutcomes(state.outcomes))
+  if (outcomes) lines.push('', `計画の採用状況: ${outcomes}`)
   const d = plan.decision
   lines.push(
     '',
@@ -113,22 +133,44 @@ export function renderPlan(state: RepoState, plan: Plan, options: { limit?: numb
 
 /** Follow-up message handed to the agent by `/issues next`. */
 export function renderKickoff(plan: Plan, pkg: WorkPackage, issues: Record<string, IssueRecord>): string {
-  const list = pkg.issues.map((n) => issueLabel(issues, n))
   const closes = pkg.issues.map((n) => `Closes #${n}`).join(', ')
+  const detail: string[] = []
+  const files = new Set<string>()
+  const areas = new Set<string>()
+  for (const n of pkg.issues) {
+    const i = issues[String(n)]
+    detail.push(`- ${issueLabel(issues, n)}${i?.htmlUrl ? `（${i.htmlUrl}）` : ''}`)
+    if (!i) continue
+    const meta: string[] = [`規模 ${i.block?.size ?? '?'}`]
+    if (i.native?.parent) meta.push(`親 Issue #${i.native.parent}`)
+    if (i.native?.milestone) meta.push(`マイルストーン「${i.native.milestone.title}」`)
+    detail.push(`  - ${meta.join('・')}`)
+    if (i.block?.acceptance) detail.push(`  - 完了条件: ${i.block.acceptance}`)
+    if (i.block?.files.length) detail.push(`  - 触る見込みのファイル: ${i.block.files.slice(0, 8).join(', ')}`)
+    i.block?.files.forEach((f) => files.add(f))
+    i.block?.areas.forEach((a) => areas.add(a))
+  }
+  const review: string[] = []
+  if (areas.size) review.push(`- 領域: ${[...areas].join(', ')}（この範囲でまとめてテスト・レビューする）`)
+  if (files.size) review.push(`- 変更の中心: ${[...files].slice(0, 10).join(', ')}`)
+  if (pkg.dependsOn.length) review.push(`- 先行パッケージ: ${pkg.dependsOn.join(', ')}（未完了なら先に確認）`)
+  const missing = pkg.issues.filter((n) => !issues[String(n)]?.block?.acceptance)
+  if (missing.length) review.push(`- 完了条件が未記入: ${missing.map((n) => `#${n}`).join(', ')}（着手前に本文から読み取り、方針と一緒に提示する）`)
   return [
-    `dsh-issue-priority の計画に沿って、作業パッケージ ${pkg.id} に着手してください（${plan.repo}）。`,
+    `dsh-work-planner の計画に沿って、作業パッケージ ${pkg.id} に着手してください（${plan.repo}）。`,
     '',
     '対象 Issue（この順で対応）:',
-    ...list.map((l) => `- ${l}`),
+    ...detail,
     '',
     'まとめた理由:',
     ...(pkg.rationale.length ? pkg.rationale.map((r) => `- ${describeRationale(r)}`) : ['- 単独パッケージ']),
+    ...(review.length ? ['', 'レビュー・テストのまとまり:', ...review] : []),
     '',
     '進め方:',
     '1. まず issue_plan_read で計画と各 Issue の本文を確認し、作業方針を短く提示して私の承認を待つ。',
-    `2. 承認後、作業用ブランチを切り（例: issues/${pkg.id}）、そのブランチ上で issue_plan_update action=start issues=[${pkg.issues.join(', ')}] を呼ぶ。`,
+    `2. 承認後、作業用ブランチを切り（例: issues/${pkg.id}）、そのブランチ上で issue_plan_update action=start issues=[${pkg.issues.join(', ')}] を呼ぶ（まとめ方を変えるなら、実際に着手する Issue だけを渡す）。`,
     '3. Issue ごとに実装・テストし、こまめにコミットする（コミットメッセージに #番号 を入れる）。',
-    `4. 実装が終わったら、push や PR の前でも issue_plan_update action=finish を呼ぶ（クローズ待ちになり、推奨から外れる）。`,
+    '4. 実装が終わったら、push や PR の前でも issue_plan_update action=finish を呼ぶ（クローズ待ちになり、推奨から外れる）。途中で分けるなら、終わった Issue だけを issues に渡す。',
     `5. PR を作るときは本文に「${closes}」を入れる。`,
     '6. 依存の見落としや分割の誤りに気づいたら issue_plan_update で記録する。',
   ].join('\n')

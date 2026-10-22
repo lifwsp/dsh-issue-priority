@@ -175,6 +175,7 @@ export const apply = (ctx: AnyCtx, rawConfig: Record<string, unknown> = {}) => {
         directionThreshold: c.directionThreshold,
         similarityThreshold: c.similarityThreshold,
         maxPackageSize: c.maxPackageSize,
+        agingDays: c.agingDays,
       }
     },
     github: async () => {

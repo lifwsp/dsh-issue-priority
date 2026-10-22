@@ -9,6 +9,7 @@ import { currentBranch, detectRepo, type SyncResult, type SyncService } from './
 import { PLANNER_VERSION } from './plan/planner.js'
 import { evidenceKeys, usableBranch } from './progress.js'
 import type { Plan } from './types.js'
+import { classifyStart, pushOutcome } from './outcomes.js'
 
 export interface RuntimeDeps {
   store: StateStore
@@ -110,13 +111,17 @@ export class IssuePlanRuntime {
 
   setOverride(state: RepoState, issue: number, action: 'defer' | 'pin' | 'clear'): void {
     state.overrides = state.overrides.filter((o) => o.issue !== issue)
-    if (action !== 'clear') state.overrides.push({ issue, action, at: this.now().toISOString() })
+    const at = this.now().toISOString()
+    if (action !== 'clear') state.overrides.push({ issue, action, at })
+    state.outcomes = pushOutcome(state.outcomes, { kind: 'override', at, issue, action })
   }
 
   addDependency(state: RepoState, issue: number, dependsOn: number, note?: string): void {
     if (issue === dependsOn) throw new Error('自分自身には依存できません。')
     state.localDependencies = state.localDependencies.filter((d) => !(d.issue === issue && d.dependsOn === dependsOn))
-    state.localDependencies.push({ issue, dependsOn, at: this.now().toISOString(), ...(note ? { note } : {}) })
+    const at = this.now().toISOString()
+    state.localDependencies.push({ issue, dependsOn, at, ...(note ? { note } : {}) })
+    state.outcomes = pushOutcome(state.outcomes, { kind: 'dependency', at, issue, dependsOn })
   }
 
   removeDependency(state: RepoState, issue: number, dependsOn: number): void {
@@ -124,6 +129,19 @@ export class IssuePlanRuntime {
   }
 
   setInProgress(state: RepoState, issues: number[] | null, branch?: string | null): void {
+    if (issues?.length) {
+      const set = [...new Set(issues)].sort((a, b) => a - b)
+      const same = state.inProgress && state.inProgress.issues.length === set.length && set.every((n) => state.inProgress!.issues.includes(n))
+      if (!same) {
+        state.outcomes = pushOutcome(state.outcomes, {
+          kind: 'start',
+          at: this.now().toISOString(),
+          issues: set,
+          ...classifyStart(state.plan, set),
+          ...(state.plan?.plannerVersion ? { plannerVersion: state.plan.plannerVersion } : {}),
+        })
+      }
+    }
     state.inProgress = issues && issues.length
       ? { issues: [...new Set(issues)].sort((a, b) => a - b), ...(usableBranch(branch) ? { branch: branch! } : {}), startedAt: this.now().toISOString() }
       : null
@@ -156,10 +174,13 @@ export class IssuePlanRuntime {
       ...targets.map((issue) => ({ issue, at, ...(usableBranch(recorded) ? { branch: recorded! } : {}) })),
     ].sort((a, b) => a.issue - b.issue)
     state.dismissed = (state.dismissed ?? []).filter((d) => !done.has(d.issue))
+    let partial = false
     if (state.inProgress) {
       const left = state.inProgress.issues.filter((n) => !done.has(n))
+      partial = left.length > 0 && left.length < state.inProgress.issues.length
       state.inProgress = left.length ? { ...state.inProgress, issues: left } : null
     }
+    if (targets.length) state.outcomes = pushOutcome(state.outcomes, { kind: 'finish', at, issues: [...targets].sort((a, b) => a - b), partial })
     return targets.sort((a, b) => a - b)
   }
 

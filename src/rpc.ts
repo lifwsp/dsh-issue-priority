@@ -7,6 +7,7 @@
  * runtime the /issues command uses. No endpoint writes to GitHub.
  */
 import { describeEvidence, describeStep, STEP_LABEL } from './progress.js'
+import { describeOutcomes, summarizeOutcomes } from './outcomes.js'
 import { nextPackage, renderKickoff, userMessage } from './render.js'
 import type { IssuePlanRuntime } from './runtime.js'
 import type { RepoState } from './store.js'
@@ -62,6 +63,8 @@ export interface PlanView {
   awaiting: { issue: number; marked: boolean; step: string; next: string; evidence: string[]; urls: string[] }[]
   /** How much the planner had to go on (to explain a flat plan). */
   signals: { open: number; withBlock: number; withPriority: number }
+  /** How the recommendations were used so far (pre-rendered), when anything was recorded. */
+  outcomes: string | null
 }
 
 function str(v: unknown): string | undefined {
@@ -117,6 +120,7 @@ function view(state: RepoState, plan: Plan, agent: AgentLike | undefined, decisi
       urls: a.evidence.flatMap((e) => (e.kind === 'pr' ? [e.url] : [])),
     })),
     signals: signalCounts(state, plan),
+    outcomes: describeOutcomes(summarizeOutcomes(state.outcomes)),
   }
 }
 
