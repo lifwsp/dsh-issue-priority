@@ -1,52 +1,96 @@
 # dsh-issue-priority
 
-DeepSeek Harness（DSH）向けプラグイン。溜まった GitHub Issue を、バックグラウンドで **「1 セッションで片付ける単位（作業パッケージ）」** にまとめ、着手順を決めておきます。DSH を開いて `/issues next` と打つか「Issue 対応しよう」と言えば、エージェントは計画を読んですぐ作業に入れます。
+Issue が溜まってくると、どれから手を付けるかを決めるだけで一仕事になります。
 
-- バックグラウンド処理に **LLM を使いません**。決定的なルールと、判断専用モデル [LiquidAI d1](https://www.liquid.ai/blog/d1-decision-model)（入力 \$0.02 / 1M トークン）だけで計画します。
-- d1 に聞くのは「変わった Issue」についてだけです。変更がなければ判定は 0 件です。
-- GitHub には書き込みません。計画はローカルに保存します。
+このプラグインは、その仕分けを裏で済ませておくための DeepSeek Harness（DSH）用プラグインです。GitHub の Issue を定期的に読み、一度の作業でまとめて片付けられるものを束ね、着手する順番まで決めておきます。DSH を開いたら、サイドバーの「次はこれ」を見て着手ボタンを押すだけです。
 
-## 流れ
+裏で動く処理には、チャット用の大きな言語モデルを使いません。並べ替えは決まったルールで行い、ルールだけでは決めきれないところ（規模、重要度、まとめるかどうか）だけを判定専用の小さなモデル [LiquidAI d1](https://www.liquid.ai/blog/d1-decision-model) に聞きます。料金は入力 100 万トークンあたり \$0.02 で、聞くのは前回から変わった Issue についてだけです。何も変わっていなければ、一問も聞きません。
+
+GitHub には何も書き込みません。計画は手元のファイルに保存します。
+
+## 全体の流れ
 
 ```
-起票（issue-authoring スキル + issue_draft） → Issue 本文に <!-- dsh-plan --> ブロック
-            ↓
-毎時の同期（プラグイン内タイマー、LLM なし）
-  GitHub 差分取得 → 依存グラフ → まとめ判定（ルール + d1） → 着手順
-            ↓
-/issues で確認 → /issues next でエージェントに着手指示 → ブランチ・実装・PR（Closes #N）
+Issue を起票する（エージェントが本文の末尾に <!-- dsh-plan --> を付ける）
+        ↓
+1 時間ごとに同期する（プラグイン内のタイマー）
+  変わった Issue だけ取得 → 依存関係を組む → まとめる → 順番を決める
+        ↓
+サイドバーで「次はこれ」を確認 → 着手ボタン → エージェントがブランチを切って実装し、PR（Closes #N）を出す
 ```
+
+## 入れ方
+
+npm にはまだ公開していないので、リポジトリを取ってきてビルドし、DSH のプロファイルにつなぎます。
+
+```bash
+git clone https://github.com/lifwsp/dsh-issue-priority.git
+cd dsh-issue-priority
+pnpm install
+pnpm build
+dsh plugin add link:$(pwd)
+```
+
+`dsh plugin` は DSH が使っているプロファイルに対して pnpm を実行します。プロファイルを指定するときは `--profile 名前` を付けてください。
+
+次に、プロファイルの `cordis.patch.yml` に設定を足します。判定モデルを使うには `allowExternalJudgment: true` が必要です。これを入れると、Issue のタイトルと本文が OpenRouter に送られます。
+
+```yaml
+- id: dsh-issue-priority
+  name: dsh-issue-priority
+  config:
+    decisionProvider: openrouter
+    allowExternalJudgment: true
+```
+
+OpenRouter のキーは、DSH の認証情報ファイル `~/.dsh/.credentials.yaml` の `refs:` に書きます。`.env` のような `名前=値` の形ではなく、YAML の形で書いてください。ファイルの権限は 600 にしておきます。
+
+```yaml
+version: 1
+refs:
+  OPENROUTER_API_KEY: sk-or-v1-...
+records:
+  ...
+```
+
+キーを画面に出さずに書き込みたいときは、`python3 scripts/set-credential.py` を実行してキーを貼り付けてください。
+
+最後に DSH アプリを再起動します。サーバー側の変更は、再起動するまで読み込まれません。
 
 ## 使い方
 
-### サイドバーの「Issue 計画」タブ（おすすめ）
+### サイドバーの「Issue 計画」タブ
 
-[dsh-better-sidebar](https://www.npmjs.com/package/dsh-better-sidebar) が入っていれば、右サイドバーの「+」から **Issue 計画** タブを開けます。コマンドを覚えなくても、ボタンで次の操作ができます。
+[dsh-better-sidebar](https://www.npmjs.com/package/dsh-better-sidebar) を入れていれば、右サイドバーの「+」から「Issue 計画」タブを開けます。コマンドを覚えていなくても、ボタンだけで操作できます。
 
-いちばん上に **「次はこれ」** のパッケージを 1 つだけ大きく出します。残りは「そのあと」に 1 行ずつ並び、▸ で開けます。計画の作られ方（最終同期、判定モデル、選んだ理由など）は画面に出さず、丸いアイコンにマウスを置くと見えます。見ておいたほうがよいこと（判定モデルが止まっている、同期エラー、壊れた dsh-plan ブロックなど）があるときだけ、リポジトリ名の横のアイコンが「!」になります。アイコンをクリックすると、同じ内容を画面に開きます。
+画面に出るのは、次にやることだけです。いちばん上に「次はこれ」のパッケージを大きく出し、残りは「そのあと」に 1 行ずつ並べます。行の ▸ を押すと中身が開きます。
 
-- **同期**: GitHub と今すぐ同期します。
-- **これに着手 / 続ける**: そのパッケージを、このセッションのエージェントに渡します。`/issues next ID` と同じです。
-- **優先 / 後回し**: Issue ごとに切り替えます。もう一度押すと解除します。
-- **作業中を解除**: `/issues done` と同じです。
+最終同期の時刻や使った判定モデル、そのパッケージを選んだ理由は、丸いアイコンにマウスを置くと見えます。ふだんは薄い「i」ですが、判定モデルが止まっている、同期に失敗した、といった見ておくべきことがあるときだけ、オレンジの「!」に変わります。
 
-タブは、開いているセッションの作業ディレクトリからリポジトリを判定します。表示中は 1 分ごとに計画を読み直します。読み直しでは GitHub に問い合わせず、保存済みの計画を返します。ただし計画が 5 分以上古いときは同期します。better-sidebar がなければ、タブが出ないだけで、コマンドはそのまま使えます。
+| ボタン | すること |
+| --- | --- |
+| 同期 | GitHub と今すぐ同期する |
+| これに着手 / 続ける | そのパッケージを、開いているセッションのエージェントに渡す |
+| 優先 / 後回し | Issue ごとに切り替える。もう一度押すと元に戻る |
+| 作業中を解除 | 作業中の印を外す |
+
+どのリポジトリの計画を出すかは、開いているセッションの作業ディレクトリで決まります。タブを開いている間は 1 分ごとに表示を更新し、計画が 5 分以上古くなっていれば GitHub と同期します。
 
 ### コマンド
 
-| コマンド | 内容 |
+サイドバーがなくても、チャット欄のコマンドで同じことができます。
+
+| コマンド | すること |
 | --- | --- |
-| `/issues` | 計画を表示（5 分以上古ければ同期） |
-| `/issues next [ID]` | 次のパッケージをエージェントに渡す（方針提示→承認待ちから始まる） |
-| `/issues defer N` / `pin N` / `clear N` | 後回し / 優先 / 解除 |
+| `/issues` | 計画を表示する |
+| `/issues next [ID]` | 次のパッケージをエージェントに渡す。エージェントは方針を示して、承認を待ってから作業を始める |
+| `/issues defer N` / `pin N` / `clear N` | Issue N を後回し / 優先 / 元に戻す |
 | `/issues done` | 作業中の印を外す |
-| `/issues sync [full]` | 今すぐ同期 |
+| `/issues sync [full]` | 今すぐ同期する |
 
-エージェント用ツール: `issue_draft`（dsh-plan ブロックの検証と本文生成）、`issue_plan_read`、`issue_plan_update`。スキル: `issue-authoring`、`issue-work`。
+### Issue の起票
 
-リポジトリはセッションの作業ディレクトリの `git remote` から自動で判定します。
-
-## dsh-plan ブロック
+エージェントに「Issue 起票して」と頼むだけで構いません。エージェントは `issue-authoring` スキルに従って、本文の末尾に計画用のブロックを付けます。ブロックの中身は会話とコードから推定し、起票したあとに「規模 M、領域 ui、依存 #5 として登録しました」のように一言で知らせます。違っていたら、そのとき直してもらえば十分です。
 
 ```markdown
 <!-- dsh-plan
@@ -59,43 +103,45 @@ acceptance: ログイン画面でエラーが表示される
 -->
 ```
 
-`issue_draft` が作るので手で書く必要はありません。ブロックのない Issue も計画に入ります（規模は d1 が推定、なければ M とみなす）。
+ブロックの書き方を覚えておく必要はありません。ブロックのない Issue（GitHub の画面から直接起票したものや、ほかの人が書いたもの）も計画に入ります。その場合は、規模や重要度を判定モデルが推定します。ブロックがあれば、その分だけ根拠が確かになります。
 
-## 並び順
+## 並べ方
 
-依存関係（GitHub の Issue 依存 > dsh-plan の `dependsOn` > 本文の `blocked by #N`）を守ったうえで、同時に着手できるものは次の順に並べます。
+まず依存関係を守ります。依存は、GitHub の Issue 依存（blocked by）、ブロックの `dependsOn`、本文の `blocked by #N` の順に信用します。
 
-1. 作業中 > 優先 > 通常 > 後回し
-2. 重要度（`priority:high` などのラベル。なければ d1 が low / medium / high を推定）
-3. 終わると着手できるようになるパッケージが多いもの
-4. 規模が小さいもの
-5. Issue 番号が小さいもの
+そのうえで、いますぐ着手できるパッケージどうしは、次の順に並べます。
 
-ブロックのない Issue どうしでも、タイトルや本文が近ければ、d1 に「一緒に片付けるべきか」を聞いてまとめます。
+1. 作業中、優先、通常、後回しの順
+2. 重要度の高いもの。`priority:high` のようなラベルがあればそれを使い、なければ判定モデルが高・中・低を推定する
+3. 片付けると、着手できるようになるパッケージが多いもの
+4. 規模の小さいもの
+5. Issue 番号の小さいもの
+
+同じファイルや同じ領域を触る Issue は、ひとつのパッケージにまとめる候補になります。ブロックのない Issue どうしでも、タイトルや本文が似ていれば候補に入れます。実際にまとめるかどうかは、判定モデルに「一緒に片付けたほうがよいか」を聞いて決めます。
 
 ## 設定
 
-| キー | 既定 | 説明 |
+| キー | 既定値 | 内容 |
 | --- | --- | --- |
-| `decisionProvider` | `openrouter` | `openrouter`（liquid/d1、モデル名は decisionModel で変更可。例: liquid/d1-ultra, typesafe/jev-1.14.0）/ `liquid`（api.liquid.ai の d1）/ `typesafe`（Jev）/ `custom` / `none` |
-| `decisionModel` | `''` | モデル ID。空なら各プロバイダの既定（`custom` では必須） |
-| `decisionApiUrl` | `''` | エンドポイント。`custom` では必須（System One 互換の POST） |
-| `decisionApiKeyRef` | `''` | 空ならプロバイダごとに `LIQUID_API_KEY` / `OPENROUTER_API_KEY` / `TYPESAFE_API_KEY` / `DECISION_API_KEY` |
-| `allowExternalJudgment` | `false` | **true にしないと d1 に送りません**（Issue 本文が外部 API に送られるため） |
-| `syncIntervalMinutes` | `60` | 0 でタイマー無効 |
-| `maxIssues` | `300` | 1 回の同期で読む Open Issue の上限（更新が新しい順、最大 5000） |
-| `maxQuestionsPerSync` | `200` | 1 回の同期で d1 に聞く上限 |
+| `decisionProvider` | `openrouter` | 判定モデルの呼び先。`openrouter`（liquid/d1）、`liquid`（api.liquid.ai）、`typesafe`（Jev）、`custom`、`none` |
+| `decisionModel` | `''` | モデル ID。空なら呼び先ごとの既定値。`liquid/d1-ultra` などに変えられる。`custom` では必須 |
+| `decisionApiUrl` | `''` | 呼び先の URL。`custom` では必須（System One 互換の POST） |
+| `decisionApiKeyRef` | `''` | キーの名前。空なら呼び先に合わせて `OPENROUTER_API_KEY`、`LIQUID_API_KEY`、`TYPESAFE_API_KEY`、`DECISION_API_KEY` |
+| `allowExternalJudgment` | `false` | `true` にしたときだけ判定モデルを使う。Issue の本文が外部に送られるため |
+| `syncIntervalMinutes` | `60` | 同期の間隔（分）。0 にするとタイマーを止める |
+| `maxIssues` | `300` | 1 回の同期で読む Issue の上限。更新の新しいものから読む（最大 5000） |
+| `maxQuestionsPerSync` | `200` | 1 回の同期で判定モデルに聞く上限 |
 | `mergeThreshold` / `actionableThreshold` / `directionThreshold` | `0.6` / `0.35` / `0.6` | 判定のしきい値 |
-| `similarityThreshold` | `0.1` | ブロックのない Issue どうしを「まとめ候補」にする文章の近さ（0〜1） |
-| `maxPackageSize` | `4` | パッケージの規模上限（S=1, M=2, L=4） |
-| `githubTokenRef` | `GITHUB_TOKEN` | なければ `GH_TOKEN`、`gh auth token` の順 |
-| `dataDir` | `''` | 空なら `$DSH_HOME/data/dsh-issue-priority` |
+| `similarityThreshold` | `0.1` | ブロックのない Issue どうしをまとめる候補にする、文章の近さ（0〜1） |
+| `maxPackageSize` | `4` | 1 パッケージの規模の上限（S=1、M=2、L=4 で数える） |
+| `githubTokenRef` | `GITHUB_TOKEN` | GitHub のトークン。なければ `GH_TOKEN`、`gh auth token` の順に探す |
+| `dataDir` | `''` | 計画の保存先。空なら `$DSH_HOME/data/dsh-issue-priority` |
 
 ## 開発
 
 ```bash
 pnpm install
-pnpm check   # typecheck + test + build
+pnpm check   # 型チェック、テスト、ビルド
 ```
 
-設計は [docs/design.md](docs/design.md)。
+設計の経緯は [docs/design.md](docs/design.md) にまとめています。
