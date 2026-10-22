@@ -1,4 +1,4 @@
-# dsh-issue-priority 設計メモ（v1）
+# dsh-work-planner 設計メモ
 
 2026-10-22 時点の合意内容。叩き台（`prioritize_issues`）からの方針転換を記録する。
 
@@ -72,49 +72,81 @@ acceptance: トークン期限切れ時に自動更新される
 
 ## 5. 計画の組み立て
 
+### 5.0 GitHub の標準機能との分担（v0.6）
+
+GitHub に同じ情報があれば、そちらを正とする。読むのは Issue 一覧（`GET /repos/{o}/{r}/issues`）の応答に含まれる項目だけで、追加のリクエストはしない。GitHub への書き込みもしない。
+
+| 情報 | GitHub 側 | フォールバック | 独自に持つ理由 |
+| --- | --- | --- | --- |
+| 重要度 | Issue Fields `Priority`（`issue_field_values`） | ラベル → d1 | Issue Fields は Organization のみ・プレビュー |
+| 規模 | Issue Fields `Effort` / `Size` / `Estimate`（数値なら ≤2 S、≤5 M、それ以上 L） | `dsh-plan` の `size` → d1 | 同上 |
+| 依存 | Issue Dependencies（`issue_dependencies_summary.blocked_by` > 0 のときだけ `/dependencies/blocked_by` を読む） | `dependsOn` → 本文・コメント | 起票時に GitHub へ書かずに済む |
+| 親子 | Sub-issues（`parent_issue_url`, `sub_issues_summary`） | — | — |
+| 期限・まとまり | Milestone（`title`, `due_on`） | — | — |
+| 機能領域・ファイル・完了条件 | なし | `dsh-plan` の `areas` / `files` / `acceptance` | GitHub に相当機能がない |
+| 手動の並べ替え・作業中・クローズ待ち・判定キャッシュ | Projects で代替しない | ローカル | 書き込みを増やさない。セッション単位で組み直す |
+
+GitHub Projects は読まない。並び順はプロジェクトごとに違い、計画は「次のセッションで何をするか」の提案なので、ローカルで組み直して試行錯誤できるほうが向いている。
+
 ### 5.1 依存（強い順）
 
 1. GitHub 標準の Issue 依存関係（blocked by）
-2. `dsh-plan` の `dependsOn`
-3. 本文と人のコメント中の `blocked by #N` 等（既存 `parseDependencies` を流用）。判定モデルがあるときは、スレッド全体を見せて「最新の書き込みの時点で、まだ #N が先に必要か」を noul で聞き、p < 0.5 なら依存から外して警告（dependency-dropped）に出す。ないときは書いてあるとおりに扱う
-4. d1 の推定 —— **推奨順としてのみ扱い、着手を止める理由にはしない**
+2. Sub-issues：親はサブ Issue が閉じるまで待つ（サブ Issue → 親の辺）
+3. `dsh-plan` の `dependsOn`
+4. 本文と人のコメント中の `blocked by #N` 等（既存 `parseDependencies` を流用）。判定モデルがあるときは、スレッド全体を見せて「最新の書き込みの時点で、まだ #N が先に必要か」を noul で聞き、p < 0.5 なら依存から外して警告（dependency-dropped）に出す。ないときは書いてあるとおりに扱う
+5. d1 の推定 —— **推奨順としてのみ扱い、着手を止める理由にはしない**
 
-1〜3 はハード制約（未クローズの依存先がある間は `blocked`）。循環は検出して `needsHuman` に回す。
+1〜4 はハード制約（未クローズの依存先がある間は `blocked`）。循環は検出して `needsHuman` に回す。
 
 ### 5.2 同一セッションにまとめる条件
 
-次の両方を満たすとき同じパッケージにする。
+狙いは「1 回のレビューとテストで確かめられる単位」。候補ペアの強さは次の合計。
 
-1. `files` が重なる（ディレクトリ一致は「近い」とみなす）、または `areas` が一致し、**かつ** d1 が「同じ変更で片付けるべき」と判定した
-   - ブロックのない Issue どうしは、タイトルと本文冒頭の文字 2-gram の Jaccard 類似度が `similarityThreshold`（既定 0.1）以上なら候補にする。`[検討案]` のような角括弧の接頭辞は除く。質問数を抑えるため、1 件あたり類似度の高い相手 3 件まで。判定モデルがないときは候補にしない。
-2. パッケージの `size` 合計が M×2 以下（S=1, M=2, L=4 換算で合計 4 以下）
+- `files` の完全一致 3 / ディレクトリ一致（近い）2 / `areas` 一致 1
+- 同じ親のサブ Issue +1.5
+- 同じマイルストーン +0.5（ほかの根拠があるときだけ）
+- 違うマイルストーンに入っている Issue どうしは候補にしない（リリースの単位をまたがない）
+
+採否：
+
+1. d1 があるときは、候補ペアごとに「同じ変更で片付けるべきか」を聞き、`mergeThreshold` 以上ならまとめる
+   - ブロックのない Issue どうしは、タイトルと本文冒頭の文字 2-gram の Jaccard 類似度が `similarityThreshold`（既定 0.1）以上なら候補にする。`[検討案]` のような角括弧の接頭辞は除く。質問数を抑えるため、1 件あたり類似度の高い相手 3 件まで。
+2. d1 がないときは強さ 3 以上だけ（ファイル完全一致、または兄弟で近いファイル、など）
+3. パッケージの `size` 合計が `maxPackageSize`（既定 4。S=1, M=2, L=4 換算）以下
 
 ### 5.3 d1 で判定すること（これ以外には使わない）
 
 | 判定 | 対象 | 型 |
 | --- | --- | --- |
-| `size` / 着手可否 | ブロックのない Issue のみ | score / noul |
+| `size` / 着手可否 | ブロックのない Issue のみ（Effort があれば規模は使わない） | score / noul |
 | まとめるべきか | 5.2 の候補ペアのみ | noul |
-| 重要度 | `priority:*` などのラベルがない Issue | score（low / medium / high） |
+| 重要度 | Priority フィールドもラベルもない Issue | score（low / medium / high） |
 | 依存の向き | 本文で互いに言及しているペアのみ | choice（A→B / B→A / なし） |
 
 - 全ペア判定はしない（件数の 2 乗になるため）。候補はコードで絞る。
 - 判定結果は入力ハッシュをキーにローカル保存し、入力が変わらない限り再判定しない。
-- 叩き台の 5 軸スコア（impact / urgency / effort / unblockValue）と重み式は v1 では使わない。
 
 ### 5.4 順序
 
 パッケージの依存グラフをトポロジカルソート。依存のない（同時に着手できる）パッケージどうしは、次の順で並べる。
 
 1. 作業中 > `pin` > 通常 > すべて `defer`
-2. 重要度が高い順（パッケージ内でいちばん高い Issue。ラベル > d1 > 既定の中）
+2. 重要度 + 緊急度が高い順（パッケージ内でいちばん高い Issue）
+   - 重要度：Priority フィールド > ラベル > d1 > 既定の中（low 0 / medium 1 / high 2）
+   - 緊急度：起票からの経過日数で最大 +0.5（`agingDays` 日で頭打ち、既定 60）、マイルストーン期限 14 日以内 +0.5、期限切れ +1
 3. 終わると着手できるようになるパッケージが多い順（推移的に数える）
 4. 規模が小さい順（すぐ終わるもの）
 5. Issue 番号の小さい順
 
 重要度のラベルは `priority:high` / `prio/low` / `P0`〜`P4` / `critical` / `urgent` / `blocker` などを読む。
 
-v0.3 までは 2〜4 がなく、依存のない Issue は番号順に並ぶだけだった。依存関係の少ないリポジトリでは全部が同じに見え、「次に何をすればいいか」がわからなかった（2026-10-22、実リポジトリで確認）。計画ロジックを変えたときは `PLANNER_VERSION` を上げ、保存済みの計画を次の同期で作り直す。
+v0.3 までは 2〜4 がなく、依存のない Issue は番号順に並ぶだけだった。v0.5 では 4 の「小さい順」が効きすぎ、重要度が同じなら大きな Issue がいつまでも後ろに残った。緊急度（aging）はその対策で、同じ重要度の中では古い Issue が小さな新しい Issue より前に出る。重要度 1 段階（1.0）を超えない範囲（最大 +0.5）にしてあるので、重要度の差はひっくり返さない（期限切れのマイルストーンだけは例外）。計画ロジックを変えたときは `PLANNER_VERSION` を上げ、保存済みの計画を次の同期で作り直す。
+
+### 5.4a 引き継ぎと採用状況の記録
+
+- `renderKickoff` は、各 Issue の完了条件（`acceptance`）・触る見込みのファイル・親 Issue・マイルストーン、パッケージの機能領域と先行パッケージを渡す。完了条件が未記入の Issue は列挙し、着手前に確かめさせる。
+- `src/outcomes.ts` が、着手・完了・override・依存追加をローカルに記録する（最新 200 件、`RepoState.outcomes`）。着手は、その時点の計画と比べて `adopted`（推奨どおり）/ `other-package`（別の計画済みパッケージ）/ `regrouped`（どのパッケージとも一致しない）に分ける。完了時に作業中の Issue が残れば `partial`（実装中に分割）。
+- 集計（`summarizeOutcomes`）は計画テキストとタブのツールチップに出す。閾値や重みを見直すときの材料にする。自動調整はまだしない。
 
 ### 5.5 クローズ待ち（実装済み・未クローズ）
 
@@ -179,8 +211,8 @@ worktree はオプション（既定オフ）。
 
 ### 7.2a サイドバータブ（better-sidebar、任意）
 
-- client 半: `client/client.js`（手書き、ビルドなし。`react` だけをローダーから受け取る）。`ctx.betterSidebar.registerTab({ id: 'dsh-issue-priority:plan', single: true })`。サイドバーのサービスは後から来ることがあるので、1 秒間隔で 30 回まで登録をやり直す。apply は例外を外に出さない。
-- host 半: `src/rpc.ts`。`ctx.inject(['webServer'], …)` の中で、`connection.rpc.handle('/dsh-issue-priority', …)` があればそれを使い、なければ `webServer.register` に prefix ルートを直接張る（DSH デスクトップには host 側の `connection` サービスがない。dsh-run-button も同じく直接ルートで動いている）。直接ルートはブラウザーの `connection.rpc.call` と同じ封筒（`client-request` → `server-response`）を話す。`connection` を inject 条件に入れると、デスクトップでは中身が一度も実行されず、ブラウザーには SPA フォールバックの HTTP 405 が返る。endpoint は `plan` / `sync` / `override` / `done`（実装完了 → クローズ待ち）/ `stop` / `reopen` / `next`。
+- client 半: `client/client.js`（手書き、ビルドなし。`react` だけをローダーから受け取る）。`ctx.betterSidebar.registerTab({ id: 'dsh-work-planner:plan', single: true })`。サイドバーのサービスは後から来ることがあるので、1 秒間隔で 30 回まで登録をやり直す。apply は例外を外に出さない。
+- host 半: `src/rpc.ts`。`ctx.inject(['webServer'], …)` の中で、`connection.rpc.handle('/dsh-work-planner', …)` があればそれを使い、なければ `webServer.register` に prefix ルートを直接張る（DSH デスクトップには host 側の `connection` サービスがない。dsh-run-button も同じく直接ルートで動いている）。直接ルートはブラウザーの `connection.rpc.call` と同じ封筒（`client-request` → `server-response`）を話す。`connection` を inject 条件に入れると、デスクトップでは中身が一度も実行されず、ブラウザーには SPA フォールバックの HTTP 405 が返る。endpoint は `plan` / `sync` / `override` / `done`（実装完了 → クローズ待ち）/ `stop` / `reopen` / `next`。
 - リポジトリの判定: `agents.list()` からタブの `scope.sessionId` に一致するエージェントを探し、その作業ディレクトリを使う。見つからなければ、タブが知らせる `scope.cwd` を使う。
 - 着手（`next`）: 一致したエージェントの `followup()` に、`/issues next` と同じ指示を渡す。エージェントが見つからないときは、エラーを返してコマンドの使用を案内する。
 - 表示中は 60 秒ごとに `plan` を呼ぶ（`ensurePlan` なので、5 分以内は保存済みの計画を返す）。
@@ -194,16 +226,18 @@ worktree はオプション（既定オフ）。
 
 `allowExternalJudgment: false` が既定。false の間は d1 に何も送らず、決定的ルールだけで計画する（計画の注記にそう出る）。true にすると、Issue のタイトル・ラベル・スレッド・areas/files が呼び先に送られる。スレッドは本文を最初の書き込みとし、人のコメント（bot は除く）を古い順に並べ、日付と書いた人を付ける。本文とコメントは同じ重みで扱い、「後の書き込みが範囲・優先度・依存を変えていれば後を優先」と注記する。コードブロックと `<details>` は `[code]` / `[details]` に縮め、コメント 1 件 800 字、最新 20 件まで。合計 4000 字を超えるときは本文の先頭 1500 字と新しいコメントを残し、途中を省く（結論は後ろに書かれやすいため）。実測（2026-10-22, liquid/d1）: 取り消しコメントの有無で依存の判定が 0.00 / 1.00 に分かれ、日英とも正しく、約 4000 字でも読めた。
 
-## 9. 実装（v0.2.0）
+## 9. 実装（v0.6.0）
 
 | ファイル | 役割 |
 | --- | --- |
 | `src/plan-block.ts` | dsh-plan ブロックの検証・描画・解析（書式の唯一の定義） |
-| `src/github/rest-adapter.ts` | REST で差分取得（`since`）、コメント、Issue dependencies（`/dependencies/blocked_by`） |
+| `src/github/rest-adapter.ts` | REST で差分取得（`since`）、コメント、Issue dependencies（`/dependencies/blocked_by`）、PR 一覧。`nativeMeta()` が一覧の応答から Issue Fields・親 Issue・マイルストーンを読む |
 | `src/decision/client.ts` | System One クライアント（liquid / openrouter / typesafe / custom） |
 | `src/decision/judge.ts` | 3 種の質問（size+actionable / merge / direction）。入力ハッシュでキャッシュ |
 | `src/plan/planner.ts` | 依存グラフ・循環検出・まとめ・トポロジカル順 |
-| `src/store.ts` | `$DSH_HOME/data/dsh-issue-priority/owner__repo.json` |
+| `src/store.ts` | `$DSH_HOME/data/dsh-work-planner/owner__repo.json`。旧名 `data/dsh-issue-priority` からの初回コピー（`migrateLegacyDataDir`） |
+| `src/progress.ts` | クローズ待ちの判定（§5.5） |
+| `src/outcomes.ts` | 計画の採用状況の記録と集計（§5.4a） |
 | `src/sync.ts` | 差分同期と再計画（変更なしなら判定 0 件） |
 | `src/runtime.ts` / `src/tools.ts` / `src/commands.ts` / `src/skill.ts` | ツール・`/issues` コマンド・スキル |
 | `src/rpc.ts` / `client/client.js` | サイドバータブ（host の RPC 窓口と、ブラウザー側の画面） |
@@ -212,6 +246,7 @@ worktree はオプション（既定オフ）。
 
 - **判定モデル**: 既定は `none`（使わない）。公開プラグインなので特定の呼び先を既定にしない。System One 形式（state + questions → answers）の API なら差し替え可能（`decisionProvider`: liquid / openrouter / typesafe / custom）。判定キャッシュはプロバイダ/モデル名を含むので、切り替えると再判定される。d1（入力 \$0.02 / 1M トークン、出力無料）。jevcore-dsh は `jev-*` モデルしか通さないため、プラグイン内に専用クライアントを持つ。
 - **依存 API**: REST。理由は §11。
+- **名称**: v0.6 で `dsh-issue-priority` → `dsh-work-planner`。主目的が Issue の優先度付けではなく、開発セッション単位の作業計画だから。データは初回起動時に旧ディレクトリからコピーする（移動はしない。旧版に戻せるように）。RPC チャネルとタブ ID も新名になるので、旧名のタブは開き直す。
 - **コマンド→エージェント**: `invocation.agent.followup(ユーザーメッセージ)` で着手指示を次ターンとして渡せる（dsh-command-goal と同じ手段）。
 
 ## 11. REST と GraphQL の比較（Issue dependencies 取得）
@@ -230,4 +265,6 @@ worktree はオプション（既定オフ）。
 
 - d1 の実コスト。d1 は質問ごとに state を含めて課金される。目安は 1 質問 ≈ 400〜800 トークン。初回 100 Issue なら size 100 件 + まとめ候補ペア数十件で約 10 万トークン ≈ \$0.002。以後は差分のみ。実測で確認する。
 - バックグラウンド同期はプラグインのプロセスが生きている間だけ動く（DSH を閉じている間は止まり、起動 30 秒後に追いつく）。
-- 判定のしきい値（merge 0.6 / actionable 0.35 / direction 0.6）は実データで調整する。
+- 判定のしきい値（merge 0.6 / actionable 0.35 / direction 0.6）は実データで調整する。§5.4a の採用状況（組み替え・分割の多さ）を見て決める。
+- 採用状況から閾値や重みを自動で調整するか（今は記録と集計だけ）。
+- Issue Fields が GA になり個人リポジトリでも使えるようになったら、`dsh-plan` の `size` を書かない運用に寄せられるか。

@@ -1,7 +1,32 @@
 import { GitHubAdapterError, } from './adapter.js';
 const DEFAULT_API_BASE = 'https://api.github.com';
-const USER_AGENT = 'dsh-issue-priority/0.5.0';
+const USER_AGENT = 'dsh-work-planner/0.6.0';
 const RETRYABLE = new Set([403, 429]);
+/** GitHub-native planning metadata from one list item (pure; no request). */
+export function nativeMeta(raw) {
+    const out = {};
+    for (const f of raw.issue_field_values ?? []) {
+        const name = f.issue_field_name?.trim().toLowerCase();
+        const value = f.single_select_option?.name ?? (typeof f.value === 'string' || typeof f.value === 'number' ? f.value : undefined);
+        if (value === undefined || value === '')
+            continue;
+        if (name === 'priority')
+            out.priority = String(value);
+        else if (name === 'effort' || name === 'size' || name === 'estimate')
+            out.effort = value;
+    }
+    // Same-repo parents only: `.../repos/{owner}/{repo}/issues/{n}`.
+    const parent = raw.parent_issue_url?.match(/\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/);
+    const self = raw.url?.match(/\/repos\/([^/]+\/[^/]+)\/issues\/\d+$/);
+    if (parent && (!self || self[1].toLowerCase() === parent[1].toLowerCase()))
+        out.parent = Number(parent[2]);
+    const total = raw.sub_issues_summary?.total ?? 0;
+    if (total > 0)
+        out.subIssues = { total, completed: raw.sub_issues_summary?.completed ?? 0 };
+    if (raw.milestone?.title)
+        out.milestone = { title: raw.milestone.title, ...(raw.milestone.due_on ? { dueOn: raw.milestone.due_on } : {}) };
+    return Object.keys(out).length ? out : undefined;
+}
 function sleep(ms, signal) {
     return new Promise((resolve, reject) => {
         if (signal?.aborted) {
@@ -126,6 +151,10 @@ export class RestGitHubAdapter {
                 closedAt: raw.closed_at ?? null,
                 nativeBlockedBy,
                 comments,
+                ...(() => {
+                    const native = nativeMeta(raw);
+                    return native ? { native } : {};
+                })(),
             };
         });
     }

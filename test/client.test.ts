@@ -54,7 +54,7 @@ function fakeCtx(sidebar: any) {
 describe('client bundle', () => {
   it('registers the tab immediately when the sidebar exists, and tears down', () => {
     const { mod, appended } = loadClient()
-    expect(mod.name).toBe('dsh-issue-priority')
+    expect(mod.name).toBe('dsh-work-planner')
     expect(mod.inject).toEqual(['connection', 'timer'])
     const dispose = vi.fn()
     const registerTab = vi.fn(() => dispose)
@@ -62,7 +62,7 @@ describe('client bundle', () => {
     mod.apply(ctx)
     expect(registerTab).toHaveBeenCalledOnce()
     const tab = (registerTab.mock.calls[0] as any)[0]
-    expect(tab.id).toBe('dsh-issue-priority:plan')
+    expect(tab.id).toBe('dsh-work-planner:plan')
     expect(tab.title()).toBe('Issue 計画')
     expect(appended).toHaveLength(1)
     // Rendering with no data yet must not throw.

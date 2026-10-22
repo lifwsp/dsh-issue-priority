@@ -1,16 +1,18 @@
-# dsh-issue-priority
+# dsh-work-planner
 
-**リポジトリの GitHub Issue を、着手する順番に並べておく DSH プラグインです。** 一緒に片付けられる Issue は、ひとつの作業単位（パッケージ）にまとめます。次にやるパッケージがサイドバーに出るので、ボタンを押せばエージェントがその作業を始めます。
+**開発エージェントが次の 1 セッションで取り組む作業を、GitHub Issue から組み立てる DSH プラグインです。** 一緒に片付けると筋のよい Issue を、ひとつの作業単位（Work Package）にまとめ、依存関係を守った実行順に並べます。次にやるパッケージがサイドバーに出るので、ボタンを押せばエージェントが完了条件や触るファイルを受け取って作業を始めます。
 
 並べ替えは 1 時間ごとに裏で行います。規模や重要度の見積もりには Decision Model を使い、チャット用の LLM は使いません。GitHub には書き込みません。
+
+> 0.5 までは `dsh-issue-priority` という名前でした。移行は「[旧名からの移行](#旧名からの移行)」を見てください。
 
 ## インストール
 
 ```bash
-dsh plugin --profile web add github:lifwsp/dsh-issue-priority
+dsh plugin --profile web add github:lifwsp/dsh-work-planner
 ```
 
-`web` は使っているプロファイル名に置き換えてください。外すときは `dsh plugin --profile web remove dsh-issue-priority` です。
+`web` は使っているプロファイル名に置き換えてください。外すときは `dsh plugin --profile web remove dsh-work-planner` です。
 
 サイドバーのタブを使うには [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) が必要です。
 
@@ -22,8 +24,8 @@ Decision Model を使うときは、呼び先と API キーを設定し、`allow
 
 ```yaml
 # cordis.patch.yml
-- id: dsh-issue-priority
-  name: dsh-issue-priority
+- id: dsh-work-planner
+  name: dsh-work-planner
   config:
     decisionProvider: liquid        # 下の表から選ぶ
     allowExternalJudgment: true
@@ -90,11 +92,37 @@ dependsOn: 12
 
 中身はエージェントが会話とコードから推定して書きます。このプラグインは、ここに書かれた規模・関係するファイル・依存関係を、まとめ方と順番の根拠に使います。コメントのない Issue も計画に入ります。
 
-## 順番の決め方
+`areas`・`files`・`acceptance`（完了条件）は GitHub に相当する機能がないので、このブロックが唯一の置き場です。`size` と `dependsOn` は、GitHub の機能が使えるならそちらを優先します（次の節）。
 
-- 「#12 の後」のように依存関係が書かれている Issue は、相手が閉じるまで **先行待ち** になります。依存は GitHub の Issue 依存（blocked by）、上の `dependsOn`、本文やコメントの `blocked by #12` から読み取ります。本文やコメントから読み取った依存は、Decision Model がスレッド全体を読み、後のコメントで取り消されていれば外します。
-- すぐ着手できるパッケージどうしは、**優先** を付けたもの、重要度が高いもの、規模が小さいものの順に並べます。重要度は `priority:high` などのラベルがあればそれを使い、なければ Decision Model が見積もります。
+## GitHub の標準機能との関係
+
+GitHub に同じ情報があれば、そちらを正とします。読むのは、Issue 一覧の取得で返ってくる項目だけです。そのため、API の呼び出しは増えません。GitHub への書き込みもしません。
+
+| 情報 | 使う GitHub の機能 | なかったとき |
+| --- | --- | --- |
+| 重要度 | Issue Fields の **Priority** | `priority:high` などのラベル → Decision Model |
+| 規模 | Issue Fields の **Effort**（`Size` / `Estimate` も可） | `dsh-plan` の `size` → Decision Model |
+| 依存 | Issue Dependencies の **blocked by** | `dsh-plan` の `dependsOn` → 本文・コメントの `blocked by #12` |
+| 親子 | **Sub-issues**。親はサブ Issue が閉じるまで先行待ち。兄弟はまとめやすくする | — |
+| 期限 | **Milestone** の期限。14 日以内なら繰り上げる。違うマイルストーンの Issue は同じパッケージにしない | — |
+
+Issue Fields は Organization のリポジトリだけの機能（2026 年 10 月時点でパブリックプレビュー）です。個人のリポジトリでは、ラベルと `dsh-plan` で同じことができます。
+
+GitHub Projects のビューや並び順は読みません。計画はセッションごとに組み直すもので、手動の並べ替え（優先 / 後回し）もローカルに置きます。そのほうが、GitHub の Issue を汚さずに試行錯誤できるからです。
+
+## まとめ方と順番の決め方
+
+- **まとめ方**：同じファイルに触る Issue、同じ機能領域（`areas`）の Issue、同じ親のサブ Issue を、1 回のレビューとテストで確かめられる単位にまとめます。Decision Model が使えるときは「同じ PR にしてよいか」をモデルに確かめます。使えないときは、同じファイルに触るものだけをまとめます（同じ親の兄弟なら、近いファイルに触るものもまとめます）。1 パッケージの大きさは `maxPackageSize`（S=1, M=2, L=4 の合計）までです。
+- **依存**：「#12 の後」のように依存関係がある Issue は、相手が閉じるまで **先行待ち** になります。本文やコメントから読み取った依存は、Decision Model がスレッド全体を読み、後のコメントで取り消されていれば外します。
+- **順番**：すぐ着手できるパッケージどうしは、**優先** を付けたもの → 重要度と緊急度の合計が高いもの → 後続を多く解放するもの → 規模が小さいもの、の順に並べます。
+- **大きな作業の先送り防止**：小さい Issue ばかり先に片付くのを防ぐため、起票から日が経つほど緊急度を上げます（`agingDays` 日で最大 +0.5。重要度 1 段階の半分）。マイルストーンの期限が 14 日以内なら +0.5、期限切れなら +1 です。
 - **後回し** を付けたものは最後に回します。
+
+## 引き継ぎと計画の評価
+
+**これに着手**（`/issues next`）でエージェントに渡す指示には、各 Issue の完了条件・触る見込みのファイル・親 Issue・マイルストーンと、パッケージ全体のレビュー・テストの観点が入ります。完了条件が未記入の Issue も示すので、エージェントは着手前に確かめられます。
+
+着手・完了・優先 / 後回し・依存の追加は、ローカルに記録します（最新 200 件）。「推奨どおり着手したか」「別のパッケージを選んだか」「組み替えたか」「実装中に分割したか」を数え、計画とタブのツールチップに「計画の採用状況」として出します。計画の精度を見直すための材料です。
 
 ## 主な設定項目
 
@@ -106,8 +134,16 @@ dependsOn: 12
 | `syncIntervalMinutes` | `60` | 同期の間隔（分）。`0` で止める |
 | `maxIssues` | `300` | 1 回の同期で読む Issue の上限 |
 | `githubTokenRef` | `GITHUB_TOKEN` | GitHub トークンの名前。見つからなければ `GH_TOKEN`、`gh auth token` を使う |
+| `maxPackageSize` | `4` | 1 パッケージの大きさの上限（S=1, M=2, L=4 の合計） |
+| `agingDays` | `60` | この日数で、古い Issue の繰り上げが最大になる。`0` で止める |
 
 ほかの項目は [src/config.ts](src/config.ts) にあります。
+
+## 旧名からの移行
+
+0.5 までの `dsh-issue-priority` から移るときは、プロファイルの `package.json` と `cordis.patch.yml` にある `dsh-issue-priority` を `dsh-work-planner` に書き換え、アプリを再起動します。設定の中身（`config:` 以下）はそのまま使えます。
+
+保存済みの計画（優先 / 後回し・追加した依存・作業中の印など）は、初回の起動時に `~/.dsh/data/dsh-issue-priority/` から `~/.dsh/data/dsh-work-planner/` へコピーします。古いディレクトリは消さないので、旧版に戻すこともできます。`dataDir` を指定しているときは、そのディレクトリをそのまま使います。
 
 ## 開発
 

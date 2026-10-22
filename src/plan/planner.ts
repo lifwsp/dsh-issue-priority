@@ -452,8 +452,9 @@ export async function buildPlan(options: PlannerOptions): Promise<Plan> {
   const accepted: Candidate[] = []
   await mapPool(candidates, 4, async (c) => {
     if (!judge.available) {
-      // No decision model: an exact file overlap, or sub-issues of one parent that
-      // also share code / an area, is strong enough on its own.
+      // No decision model: an exact file overlap is strong enough on its own;
+      // sub-issues of one parent also need nearby files (or a shared area and
+      // the same milestone).
       if (c.strength >= 3) accepted.push(c)
       return
     }

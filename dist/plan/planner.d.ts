@@ -6,7 +6,7 @@
 import type { Judge } from '../decision/judge.js';
 import { type AwaitingClose, type CloseEvidence, type IssueRecord, type LocalDependency, type Override, type Plan } from '../types.js';
 /** Bump when planning logic changes so stored plans are rebuilt. */
-export declare const PLANNER_VERSION = 4;
+export declare const PLANNER_VERSION = 5;
 export interface PlannerOptions {
     repo: string;
     issues: readonly IssueRecord[];
@@ -35,6 +35,12 @@ export interface PlannerOptions {
     maxPackageSize?: number;
     /** Hard cap on decision-model questions per run (cache misses only). */
     maxQuestions?: number;
+    /**
+     * Days after which an open issue gets the full aging boost (+0.5 priority
+     * score), so large or long-waiting work is not starved by a stream of quick
+     * wins. 0 disables aging.
+     */
+    agingDays?: number;
     now?: () => Date;
     signal?: AbortSignal;
 }

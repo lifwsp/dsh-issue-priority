@@ -1,4 +1,4 @@
-/** Shared domain types for dsh-issue-priority (v1: work-package planning). */
+/** Shared domain types for dsh-work-planner (work-package planning). */
 export type IssueSize = 'S' | 'M' | 'L';
 export declare const SIZE_WEIGHT: Record<IssueSize, number>;
 /** Parsed `<!-- dsh-plan -->` block. */
@@ -15,6 +15,28 @@ export interface ThreadPost {
     by: string;
     at: string;
     text: string;
+}
+/**
+ * Planning signals GitHub already keeps: Issue Fields (org repos, preview),
+ * sub-issues and milestones. Read from the issue list payload (no extra
+ * request, nothing written); absent values are simply omitted.
+ */
+export interface NativeMeta {
+    /** Issue field "Priority" (single select option name, e.g. "P1", "High"). */
+    priority?: string;
+    /** Issue field "Effort" (option name such as "S" / "Medium", or a number). */
+    effort?: string | number;
+    /** Parent issue number when this is a sub-issue in the same repository. */
+    parent?: number;
+    /** Sub-issues of this issue: total and completed. */
+    subIssues?: {
+        total: number;
+        completed: number;
+    };
+    milestone?: {
+        title: string;
+        dueOn?: string;
+    };
 }
 /** One Issue as kept in the local snapshot. */
 export interface IssueRecord {
@@ -45,9 +67,12 @@ export interface IssueRecord {
     createdAt?: string;
     /** Every `#N` mentioned in the body or human comments (for mutual-mention detection). */
     mentions: number[];
+    /** GitHub-native fields, sub-issue parent, milestone (see NativeMeta). */
+    native?: NativeMeta;
 }
 export type PackageStatus = 'ready' | 'waiting' | 'blocked' | 'in_progress';
-export type DependencySource = 'github' | 'dsh-plan' | 'text' | 'local';
+/** github = native "blocked by"; sub-issue = a parent waits for its open sub-issues. */
+export type DependencySource = 'github' | 'sub-issue' | 'dsh-plan' | 'text' | 'local';
 export type Rationale = {
     kind: 'files-overlap';
     issues: [number, number];
@@ -88,11 +113,31 @@ export type Rationale = {
 } | {
     kind: 'deferred';
     issue: number;
+} | {
+    kind: 'same-parent';
+    issues: [number, number];
+    parent: number;
+} | {
+    kind: 'same-milestone';
+    issues: [number, number];
+    milestone: string;
+} | {
+    kind: 'aging';
+    issue: number;
+    days: number;
+} | {
+    kind: 'due';
+    issue: number;
+    milestone: string;
+    dueOn: string;
+    days: number;
 };
 /** Importance of an issue: low / medium / high. */
 export type PriorityLevel = 'low' | 'medium' | 'high';
 export declare const PRIORITY_RANK: Record<PriorityLevel, number>;
-export type PrioritySource = 'label' | 'decision' | 'default';
+/** github = the native Priority issue field. */
+export type PrioritySource = 'label' | 'github' | 'decision' | 'default';
+export type SizeSource = 'block' | 'github' | 'decision' | 'default';
 export interface WorkPackage {
     id: string;
     /** Issues in the order they should be handled within one session. */
@@ -105,7 +150,7 @@ export interface WorkPackage {
     /** Sum of size weights (S=1, M=2, L=4). */
     size: number;
     /** Where each issue's size came from, keyed by issue number. */
-    sizeSource: Record<string, 'block' | 'decision' | 'default'>;
+    sizeSource: Record<string, SizeSource>;
     /** Highest priority among the package's issues. */
     priority: PriorityLevel;
     /** Where that priority came from ('default' = nothing to go on). */

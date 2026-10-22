@@ -8,11 +8,11 @@ import { createLogger } from './log.js';
 import { createRpcHandler, createRpcRoute, RPC_CHANNEL } from './rpc.js';
 import { IssuePlanRuntime } from './runtime.js';
 import { ISSUE_AUTHORING_SKILL, ISSUE_WORK_SKILL } from './skill.js';
-import { createFileStore, defaultDataDir } from './store.js';
+import { createFileStore, defaultDataDir, migrateLegacyDataDir } from './store.js';
 import { SyncService } from './sync.js';
 import { createIssueDraftTool, createPlanReadTool, createPlanUpdateTool } from './tools.js';
 const execFileAsync = promisify(execFile);
-export const name = 'dsh-issue-priority';
+export const name = 'dsh-work-planner';
 /**
  * Required core services. `credentials` and `workingDirectory` are looked up
  * lazily with ctx.get() so their absence degrades (env / process.cwd()) instead
@@ -139,7 +139,7 @@ function mountRpc(ctx, runtime, logger) {
         }
         const route = createRpcRoute(handler, connection?.requestRejection?.bind(connection));
         try {
-            inner.effect(() => webServer.register(route), 'dsh-issue-priority: sidebar RPC route');
+            inner.effect(() => webServer.register(route), 'dsh-work-planner: sidebar RPC route');
             logger.info('sidebar RPC channel mounted as direct route', { channel: RPC_CHANNEL });
         }
         catch (error) {
@@ -155,7 +155,19 @@ export const apply = (ctx, rawConfig = {}) => {
     const config = () => resolveLiveConfig(rawConfig);
     const hostLogger = typeof ctx.logger === 'function' ? ctx.logger(name) : undefined;
     const logger = createLogger(hostLogger ?? console, config().logLevel);
-    const store = createFileStore(config().dataDir || defaultDataDir());
+    // Plans stored under the old name (dsh-issue-priority ≤ 0.5) carry over once.
+    const dataDir = config().dataDir || defaultDataDir();
+    const migrated = config().dataDir
+        ? Promise.resolve(false)
+        : migrateLegacyDataDir(dataDir).then((copied) => {
+            if (copied)
+                logger.info('carried over plans stored as dsh-issue-priority', { dataDir });
+            return copied;
+        }, (error) => {
+            logger.warn('could not carry over plans stored as dsh-issue-priority', { error: String(error) });
+            return false;
+        });
+    const store = createFileStore(dataDir, 2000, migrated);
     const sync = new SyncService({
         store,
         logger,
@@ -169,6 +181,7 @@ export const apply = (ctx, rawConfig = {}) => {
                 directionThreshold: c.directionThreshold,
                 similarityThreshold: c.similarityThreshold,
                 maxPackageSize: c.maxPackageSize,
+                agingDays: c.agingDays,
             };
         },
         github: async () => {

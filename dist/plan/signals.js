@@ -58,4 +58,32 @@ export function textSimilarity(a, b) {
             inter += 1;
     return inter / (x.size + y.size - inter);
 }
+/**
+ * Priority from the GitHub "Priority" issue field (option name such as
+ * `P1`, `High`, `Urgent`). Same vocabulary as `priority:` labels.
+ */
+export function fieldPriority(value) {
+    if (!value?.trim())
+        return null;
+    return labelPriority([`priority:${value.trim()}`]);
+}
+/** Size from the GitHub "Effort" issue field: option names (S / Medium / XL) or a number (points). */
+export function fieldEffort(value) {
+    if (value === undefined || value === '')
+        return null;
+    if (typeof value === 'number' || /^\d+(?:\.\d+)?$/.test(String(value).trim())) {
+        const n = Number(value);
+        if (!Number.isFinite(n) || n <= 0)
+            return null;
+        return n <= 2 ? 'S' : n <= 5 ? 'M' : 'L';
+    }
+    const v = String(value).trim().toLowerCase();
+    if (/^(xs|s|small|tiny|low)$/.test(v))
+        return 'S';
+    if (/^(m|medium|mid|moderate)$/.test(v))
+        return 'M';
+    if (/^(l|xl|xxl|large|huge|high)$/.test(v))
+        return 'L';
+    return null;
+}
 //# sourceMappingURL=signals.js.map

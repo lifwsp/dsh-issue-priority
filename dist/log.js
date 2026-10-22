@@ -22,7 +22,7 @@ function format(message, fields) {
     return `${message} ${JSON.stringify(redactValue(fields))}`;
 }
 const ORDER = { silent: 0, warn: 1, info: 2, debug: 3 };
-export function createLogger(base, level, prefix = '[dsh-issue-priority]') {
+export function createLogger(base, level, prefix = '[dsh-work-planner]') {
     const enabled = (min) => ORDER[level] >= ORDER[min];
     const write = (fn, fallback, message, fields) => {
         const line = `${prefix} ${format(message, fields)}`;

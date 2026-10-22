@@ -63,7 +63,7 @@ export const Config = Schema.object({
   githubTokenRef: Schema.string().default('GITHUB_TOKEN').description('Credential / env name for a GitHub token (value is never logged). Falls back to `gh auth token`.').volatile(),
   githubApiBase: Schema.string().default('https://api.github.com').description('GitHub API base URL.').volatile(),
   githubMaxRetries: Schema.natural().min(0).max(8).default(3).description('Retries on GitHub rate limit.').volatile(),
-  dataDir: Schema.string().default('').description('Local plan storage directory. Empty = $DSH_HOME/data/dsh-issue-priority.'),
+  dataDir: Schema.string().default('').description('Local plan storage directory. Empty = $DSH_HOME/data/dsh-work-planner.'),
   logLevel: Schema.union(['silent' as const, 'warn' as const, 'info' as const, 'debug' as const]).default('info').description('Log verbosity.').volatile(),
   decisionTimeoutMs: Schema.natural().min(1000).max(120_000).default(15_000).description('Per-request decision API timeout.').volatile(),
 })

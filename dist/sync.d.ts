@@ -12,6 +12,7 @@ export interface SyncSettings {
     directionThreshold: number;
     similarityThreshold?: number;
     maxPackageSize: number;
+    agingDays?: number;
 }
 export interface SyncDeps {
     github: () => GitHubIssueSource | Promise<GitHubIssueSource>;

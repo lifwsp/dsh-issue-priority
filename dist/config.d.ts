@@ -13,6 +13,7 @@ export interface PluginConfig {
     directionThreshold?: number;
     similarityThreshold?: number;
     maxPackageSize?: number;
+    agingDays?: number;
     syncIntervalMinutes?: number;
     maxIssues?: number;
     githubTokenRef?: string;
@@ -38,6 +39,7 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     directionThreshold: Schema<number, number, "volatile-defined">;
     similarityThreshold: Schema<number, number, "volatile-defined">;
     maxPackageSize: Schema<number, number, "volatile-defined">;
+    agingDays: Schema<number, number, "volatile-defined">;
     syncIntervalMinutes: Schema<number, number, "defined">;
     maxIssues: Schema<number, number, "volatile-defined">;
     githubTokenRef: Schema<string, string, "volatile-defined">;
@@ -58,6 +60,7 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     directionThreshold: Schema<number, number, "volatile-defined">;
     similarityThreshold: Schema<number, number, "volatile-defined">;
     maxPackageSize: Schema<number, number, "volatile-defined">;
+    agingDays: Schema<number, number, "volatile-defined">;
     syncIntervalMinutes: Schema<number, number, "defined">;
     maxIssues: Schema<number, number, "volatile-defined">;
     githubTokenRef: Schema<string, string, "volatile-defined">;

@@ -1,7 +1,7 @@
 {
-  "name": "dsh-issue-priority",
-  "version": "0.5.0",
-  "description": "Background GitHub Issue planning for DeepSeek Harness: bundles issues into session-sized work packages and orders them, using deterministic rules plus the LiquidAI d1 decision model (no LLM in the background).",
+  "name": "dsh-work-planner",
+  "version": "0.6.0",
+  "description": "Work planner for DeepSeek Harness: groups GitHub issues into session-sized work packages, orders them by dependencies, importance and urgency, and hands the next package to the coding agent. Reads GitHub issue fields, sub-issues and dependencies; plans stay local.",
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
@@ -16,11 +16,11 @@
   "author": "lifwsp",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lifwsp/dsh-issue-priority.git"
+    "url": "git+https://github.com/lifwsp/dsh-work-planner.git"
   },
-  "homepage": "https://github.com/lifwsp/dsh-issue-priority#readme",
+  "homepage": "https://github.com/lifwsp/dsh-work-planner#readme",
   "bugs": {
-    "url": "https://github.com/lifwsp/dsh-issue-priority/issues"
+    "url": "https://github.com/lifwsp/dsh-work-planner/issues"
   },
   "type": "module",
   "engines": {

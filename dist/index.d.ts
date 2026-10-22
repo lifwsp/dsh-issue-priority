@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { Config } from './config.js';
-export declare const name = "dsh-issue-priority";
+export declare const name = "dsh-work-planner";
 /**
  * Required core services. `credentials` and `workingDirectory` are looked up
  * lazily with ctx.get() so their absence degrades (env / process.cwd()) instead

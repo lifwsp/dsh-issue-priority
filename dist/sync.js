@@ -90,6 +90,7 @@ export function toIssueRecord(raw) {
         thread,
         ...(raw.author ? { author: raw.author } : {}),
         ...(raw.createdAt ? { createdAt: raw.createdAt } : {}),
+        ...(raw.native ? { native: raw.native } : {}),
     };
 }
 /** `owner/repo` from the git remote of a directory (origin first, then any GitHub remote). */
@@ -215,6 +216,7 @@ export class SyncService {
             directionThreshold: settings.directionThreshold,
             ...(settings.similarityThreshold !== undefined ? { similarityThreshold: settings.similarityThreshold } : {}),
             maxPackageSize: settings.maxPackageSize,
+            agingDays: settings.agingDays,
             maxQuestions: settings.maxQuestionsPerSync,
             now: this.now,
             signal,

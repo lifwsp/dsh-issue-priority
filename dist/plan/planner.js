@@ -1,8 +1,8 @@
 import { SIZE_WEIGHT, PRIORITY_RANK, } from '../types.js';
 import { fileOverlap } from './files.js';
-import { labelPriority, textSimilarity } from './signals.js';
+import { fieldEffort, fieldPriority, labelPriority, textSimilarity } from './signals.js';
 /** Bump when planning logic changes so stored plans are rebuilt. */
-export const PLANNER_VERSION = 4;
+export const PLANNER_VERSION = 5;
 const STILL_BLOCKED_THRESHOLD = 0.5;
 const DEFAULT_SIZE = 'M';
 async function mapPool(items, concurrency, fn) {
@@ -115,7 +115,7 @@ function topoSort(nodes, before, key) {
     return result;
 }
 export async function buildPlan(options) {
-    const { judge, signal, mergeThreshold = 0.6, actionableThreshold = 0.35, directionThreshold = 0.6, similarityThreshold = 0.1, maxPackageSize = 4, maxQuestions = 200, } = options;
+    const { judge, signal, mergeThreshold = 0.6, actionableThreshold = 0.35, directionThreshold = 0.6, similarityThreshold = 0.1, maxPackageSize = 4, maxQuestions = 200, agingDays = 60, } = options;
     const now = options.now ?? (() => new Date());
     const warnings = [];
     const needsHuman = [];
@@ -138,9 +138,17 @@ export async function buildPlan(options) {
     for (const issue of open) {
         if (issue.blockError)
             warnings.push({ issue: issue.number, kind: 'invalid-block', detail: issue.blockError });
-        if (issue.block) {
+        // The GitHub "Effort" field is what the team maintains: it wins over the block.
+        const effort = fieldEffort(issue.native?.effort);
+        if (effort) {
+            sizes.set(issue.number, effort);
+            sizeSource.set(issue.number, 'github');
+        }
+        else if (issue.block) {
             sizes.set(issue.number, issue.block.size);
             sizeSource.set(issue.number, 'block');
+        }
+        if (issue.block) {
             for (const a of issue.block.areas) {
                 if (knownAreas.size && !knownAreas.has(a)) {
                     warnings.push({ issue: issue.number, kind: 'unknown-area', detail: a });
@@ -148,23 +156,31 @@ export async function buildPlan(options) {
             }
         }
     }
+    // Block-less issues are asked once (size + actionable); a native Effort keeps its size.
     const blockless = open.filter((i) => !i.block);
     await mapPool(blockless, 4, async (issue) => {
+        const known = sizes.has(issue.number);
+        const fallback = () => {
+            if (known)
+                return;
+            sizes.set(issue.number, DEFAULT_SIZE);
+            sizeSource.set(issue.number, 'default');
+        };
         if (!budgetLeft()) {
             if (judge.available)
                 skippedForBudget += 1;
-            sizes.set(issue.number, DEFAULT_SIZE);
-            sizeSource.set(issue.number, 'default');
+            fallback();
             return;
         }
         const j = await judge.size(issue, signal);
         if (!j) {
-            sizes.set(issue.number, DEFAULT_SIZE);
-            sizeSource.set(issue.number, 'default');
+            fallback();
             return;
         }
-        sizes.set(issue.number, j.size);
-        sizeSource.set(issue.number, 'decision');
+        if (!known) {
+            sizes.set(issue.number, j.size);
+            sizeSource.set(issue.number, 'decision');
+        }
         if (j.actionable < actionableThreshold && !pinned.has(issue.number) && !inProgress.has(issue.number)) {
             needsHuman.push({ issue: issue.number, reason: 'unclear', detail: `actionable p=${j.actionable.toFixed(2)}` });
             excluded.add(issue.number);
@@ -185,6 +201,10 @@ export async function buildPlan(options) {
     for (const issue of open) {
         for (const d of issue.nativeBlockedBy)
             addEdge(issue.number, d, 'github');
+        // A parent (epic / tracking issue) waits for its open sub-issues.
+        const parent = issue.native?.parent;
+        if (parent !== undefined)
+            addEdge(parent, issue.number, 'sub-issue');
         for (const d of issue.block?.dependsOn ?? [])
             addEdge(issue.number, d, 'dsh-plan');
         for (const d of issue.textBlockedBy)
@@ -248,8 +268,12 @@ export async function buildPlan(options) {
     const priority = new Map();
     const needModel = [];
     for (const issue of eligible) {
-        const fromLabel = labelPriority(issue.labels);
-        if (fromLabel)
+        // The native Priority field is the structured source of truth; labels are the fallback.
+        const fromField = fieldPriority(issue.native?.priority);
+        const fromLabel = fromField ? null : labelPriority(issue.labels);
+        if (fromField)
+            priority.set(issue.number, { level: fromField, score: PRIORITY_RANK[fromField], source: 'github' });
+        else if (fromLabel)
             priority.set(issue.number, { level: fromLabel, score: PRIORITY_RANK[fromLabel], source: 'label' });
         else
             needModel.push(issue);
@@ -290,31 +314,50 @@ export async function buildPlan(options) {
             return;
         advisory.push(d.choice === 'a-first' ? { before: a.number, after: b.number, p: d.p } : { before: b.number, after: a.number, p: d.p });
     });
+    // Strength: exact file overlap 3, same directory 2, shared area 1. Sharing a
+    // goal adds to it — sub-issues of the same parent (+1.5) are reviewed and
+    // tested as one outcome; the same milestone (+0.5) ships together. Issues
+    // aimed at different milestones are never bundled (one PR, one release).
     const candidates = [];
+    const milestoneOf = (i) => i.native?.milestone?.title;
+    const parentOf = (i) => i.native?.parent;
+    const differentMilestones = (a, b) => {
+        const x = milestoneOf(a);
+        const y = milestoneOf(b);
+        return x !== undefined && y !== undefined && x !== y;
+    };
     for (let i = 0; i < eligible.length; i += 1) {
         const a = eligible[i];
-        if (!a.block)
-            continue;
         for (let j = i + 1; j < eligible.length; j += 1) {
             const b = eligible[j];
-            if (!b.block)
-                continue;
-            const ov = fileOverlap(a.block.files, b.block.files);
-            const sharedAreas = a.block.areas.filter((x) => b.block.areas.includes(x));
-            if (!ov.exact.length && !ov.near.length && !sharedAreas.length)
+            if (differentMilestones(a, b))
                 continue;
             const rationale = [];
-            if (ov.exact.length || ov.near.length) {
-                rationale.push({ kind: 'files-overlap', issues: [a.number, b.number], files: [...ov.exact, ...ov.near] });
+            let strength = 0;
+            if (a.block && b.block) {
+                const ov = fileOverlap(a.block.files, b.block.files);
+                const sharedAreas = a.block.areas.filter((x) => b.block.areas.includes(x));
+                if (ov.exact.length || ov.near.length) {
+                    rationale.push({ kind: 'files-overlap', issues: [a.number, b.number], files: [...ov.exact, ...ov.near] });
+                }
+                if (sharedAreas.length)
+                    rationale.push({ kind: 'area-match', issues: [a.number, b.number], areas: sharedAreas });
+                strength = ov.exact.length ? 3 : ov.near.length ? 2 : sharedAreas.length ? 1 : 0;
             }
-            if (sharedAreas.length)
-                rationale.push({ kind: 'area-match', issues: [a.number, b.number], areas: sharedAreas });
-            candidates.push({
-                a: a.number,
-                b: b.number,
-                strength: ov.exact.length ? 3 : ov.near.length ? 2 : 1,
-                rationale,
-            });
+            const parent = parentOf(a);
+            const siblings = parent !== undefined && parent === parentOf(b);
+            if (siblings) {
+                strength += 1.5;
+                rationale.push({ kind: 'same-parent', issues: [a.number, b.number], parent });
+            }
+            if (!strength)
+                continue;
+            const milestone = milestoneOf(a);
+            if (milestone !== undefined && milestone === milestoneOf(b)) {
+                strength += 0.5;
+                rationale.push({ kind: 'same-milestone', issues: [a.number, b.number], milestone });
+            }
+            candidates.push({ a: a.number, b: b.number, strength, rationale });
         }
     }
     // Block-less issues: near-duplicate wording is a (weak) candidate signal.
@@ -329,7 +372,7 @@ export async function buildPlan(options) {
                 const b = eligible[j];
                 if (a.block && b.block)
                     continue;
-                if (paired.has(`${a.number}-${b.number}`) || hardBetween(a.number, b.number))
+                if (paired.has(`${a.number}-${b.number}`) || hardBetween(a.number, b.number) || differentMilestones(a, b))
                     continue;
                 const s = textSimilarity(a, b);
                 if (s < similarityThreshold)
@@ -350,8 +393,10 @@ export async function buildPlan(options) {
     const accepted = [];
     await mapPool(candidates, 4, async (c) => {
         if (!judge.available) {
-            // No decision model: only an exact file overlap is strong enough on its own.
-            if (c.strength === 3)
+            // No decision model: an exact file overlap is strong enough on its own;
+            // sub-issues of one parent also need nearby files (or a shared area and
+            // the same milestone).
+            if (c.strength >= 3)
                 accepted.push(c);
             return;
         }
@@ -538,13 +583,49 @@ export async function buildPlan(options) {
         if (seen.size)
             p.rationale.push({ kind: 'unblocks', count: seen.size });
     }
-    // Among packages that are free to go: active > pinned > importance >
+    // Urgency on top of importance, so big or old work is not starved by a
+    // steady stream of quick wins: aging adds up to +0.5 over `agingDays`, a
+    // milestone due within 14 days adds +0.5 (+1 when overdue).
+    const nowMs = now().getTime();
+    const DAY = 86_400_000;
+    const urgency = (n) => {
+        const issue = byNumber.get(n);
+        let boost = 0;
+        const created = issue?.createdAt ? Date.parse(issue.createdAt) : NaN;
+        if (agingDays > 0 && Number.isFinite(created)) {
+            boost += 0.5 * Math.min(1, Math.max(0, (nowMs - created) / DAY) / agingDays);
+        }
+        const due = issue?.native?.milestone?.dueOn ? Date.parse(issue.native.milestone.dueOn) : NaN;
+        if (Number.isFinite(due)) {
+            const days = (due - nowMs) / DAY;
+            if (days < 0)
+                boost += 1;
+            else if (days <= 14)
+                boost += 0.5;
+        }
+        return boost;
+    };
+    for (const p of packages) {
+        for (const n of p.issues) {
+            const issue = byNumber.get(n);
+            const created = issue.createdAt ? Date.parse(issue.createdAt) : NaN;
+            const age = Number.isFinite(created) ? Math.floor((nowMs - created) / DAY) : 0;
+            if (agingDays > 0 && age >= agingDays)
+                p.rationale.push({ kind: 'aging', issue: n, days: age });
+            const m = issue.native?.milestone;
+            const due = m?.dueOn ? Date.parse(m.dueOn) : NaN;
+            if (m?.dueOn && Number.isFinite(due) && due - nowMs <= 14 * DAY) {
+                p.rationale.push({ kind: 'due', issue: n, milestone: m.title, dueOn: m.dueOn, days: Math.ceil((due - nowMs) / DAY) });
+            }
+        }
+    }
+    // Among packages that are free to go: active > pinned > importance+urgency >
     // unblocks more > smaller (quick win) > lower issue number; deferred last.
     const pkgKey = (p) => {
         const isActive = p.issues.some((n) => inProgress.has(n));
         const isPinned = p.issues.some((n) => pinned.has(n));
         const isDeferred = p.issues.every((n) => deferred.has(n));
-        const score = Math.max(...p.issues.map((n) => prio(n).score));
+        const score = Math.max(...p.issues.map((n) => prio(n).score + urgency(n)));
         return [
             isActive ? 0 : isPinned ? 1 : isDeferred ? 3 : 2,
             -Math.round(score * 100),

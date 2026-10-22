@@ -1,5 +1,5 @@
 /*
- * dsh-issue-priority — browser half.
+ * dsh-work-planner — browser half.
  *
  * Adds an "Issue 計画" tab to dsh-better-sidebar (optional peer). The tab shows
  * the work-package plan the host keeps in the background and offers buttons for
@@ -13,7 +13,7 @@
  *  - The sidebar service may arrive after this bundle → bind with a retry.
  */
 window.__ModuleLoader__.load({
-	id: "dsh-issue-priority",
+	id: "dsh-work-planner",
 	factory: function (require) {
 		var module = { exports: {} };
 		var exports = module.exports;
@@ -21,8 +21,8 @@ window.__ModuleLoader__.load({
 		var react = require("react");
 		var h = react.createElement;
 
-		var CHANNEL = "/dsh-issue-priority";
-		var TAB_ID = "dsh-issue-priority:plan";
+		var CHANNEL = "/dsh-work-planner";
+		var TAB_ID = "dsh-work-planner:plan";
 		var PREFIX = "dsh-issueprio";
 		var POLL_MS = 60000;
 
@@ -403,7 +403,7 @@ window.__ModuleLoader__.load({
 							component: PlanTab,
 						});
 					} catch (error) {
-						window.console.error("dsh-issue-priority: could not register the sidebar tab", error);
+						window.console.error("dsh-work-planner: could not register the sidebar tab", error);
 					}
 					return true;
 				};
@@ -416,7 +416,7 @@ window.__ModuleLoader__.load({
 					}, 1000);
 				}
 			} catch (error) {
-				window.console.error("dsh-issue-priority: client apply failed", error);
+				window.console.error("dsh-work-planner: client apply failed", error);
 			}
 
 			try {
@@ -428,15 +428,15 @@ window.__ModuleLoader__.load({
 						if (styleTag !== null) styleTag.remove();
 						rpc = null;
 					};
-				}, "dsh-issue-priority: sidebar tab");
+				}, "dsh-work-planner: sidebar tab");
 			} catch (error) {
-				window.console.error("dsh-issue-priority: could not register teardown", error);
+				window.console.error("dsh-work-planner: could not register teardown", error);
 			}
 		}
 
 		exports.apply = apply;
 		exports.inject = ["connection", "timer"];
-		exports.name = "dsh-issue-priority";
+		exports.name = "dsh-work-planner";
 		return module.exports;
 	},
 });

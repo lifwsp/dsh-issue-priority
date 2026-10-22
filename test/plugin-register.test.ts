@@ -6,7 +6,7 @@ import { apply, inject, name } from '../src/index.js'
 
 describe('plugin registration', () => {
   it('registers tools, the /issues command and skills, all disposable', () => {
-    expect(name).toBe('dsh-issue-priority')
+    expect(name).toBe('dsh-work-planner')
     expect(inject).toEqual(expect.arrayContaining(['tools', 'commands', 'skills']))
     const disposers: Array<() => void> = []
     const tools = vi.fn(() => () => {})
@@ -51,7 +51,7 @@ describe('plugin registration', () => {
     }
     apply(ctx as never, { logLevel: 'silent', dataDir: mkdtempSync(join(tmpdir(), 'dip-')) })
     expect(injected).toEqual([['webServer']])
-    expect(handle).toHaveBeenCalledWith('/dsh-issue-priority', expect.any(Function))
+    expect(handle).toHaveBeenCalledWith('/dsh-work-planner', expect.any(Function))
   })
 
   it('falls back to a direct webServer route when connection is absent (DSH desktop)', () => {
@@ -69,6 +69,6 @@ describe('plugin registration', () => {
     }
     apply(ctx as never, { logLevel: 'silent', dataDir: mkdtempSync(join(tmpdir(), 'dip-')) })
     expect(register).toHaveBeenCalledOnce()
-    expect((register.mock.calls[0] as any)[0]).toMatchObject({ kind: 'prefix', path: '/dsh-issue-priority' })
+    expect((register.mock.calls[0] as any)[0]).toMatchObject({ kind: 'prefix', path: '/dsh-work-planner' })
   })
 })

@@ -13,7 +13,7 @@ import type { IssuePlanRuntime } from './runtime.js'
 import type { RepoState } from './store.js'
 import type { Plan } from './types.js'
 
-export const RPC_CHANNEL = '/dsh-issue-priority'
+export const RPC_CHANNEL = '/dsh-work-planner'
 
 const ENDPOINT_SEGMENT = /^[A-Za-z0-9_$.-]+$/
 const MAX_REQUEST_BYTES = 1 << 20

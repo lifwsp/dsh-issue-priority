@@ -81,12 +81,12 @@ describe('sidebar RPC', () => {
       await route.handler(req as never, { writeHead: (s: number) => { status = s }, end: (b?: string) => { out = b ?? '' } })
       return { status, out }
     }
-    const ok = await call('/dsh-issue-priority/plan', { type: 'client-request', rpcId: 'r1', method: 'plan', payload: { a: 1 } })
+    const ok = await call('/dsh-work-planner/plan', { type: 'client-request', rpcId: 'r1', method: 'plan', payload: { a: 1 } })
     expect(ok.status).toBe(200)
     expect(JSON.parse(ok.out)).toEqual({ type: 'server-response', rpcId: 'r1', result: { ok: true, value: { endpoint: 'plan', payload: { a: 1 } } } })
-    expect((await call('/dsh-issue-priority/plan', {}, 'GET')).status).toBe(404)
-    expect((await call('/dsh-issue-priority/plan', {}, 'POST', 'text/plain')).status).toBe(415)
-    const bad = await call('/dsh-issue-priority/plan', { type: 'client-request', rpcId: 'r2', method: 'sync' })
+    expect((await call('/dsh-work-planner/plan', {}, 'GET')).status).toBe(404)
+    expect((await call('/dsh-work-planner/plan', {}, 'POST', 'text/plain')).status).toBe(415)
+    const bad = await call('/dsh-work-planner/plan', { type: 'client-request', rpcId: 'r2', method: 'sync' })
     expect(JSON.parse(bad.out).result.ok).toBe(false)
   })
 })

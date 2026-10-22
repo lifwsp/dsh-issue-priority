@@ -3,7 +3,7 @@ export const ISSUE_AUTHORING_SKILL = {
     name: 'issue-authoring',
     description: 'GitHub Issue を書く・起票する・直す・分割するときは必ずこの手順。本文を書く前に「1 Issue = 1 つの主成果」で単位を設計し、既存 Issue への追記・新規起票・分割を判断してから、各 Issue に issue_draft で計画用の <!-- dsh-plan --> ブロックを付ける（ユーザーがブロックに触れなくても）。',
     whenToUse: '「Issue 起票して」「Issue にしておいて」「バグとして登録して」「改善案を開発に共有して」など、Issue を新規作成・起票・編集・分割するとき。複数の指摘や教訓をまとめて Issue 化するとき。gh issue create / edit を使う前。',
-    content: `# Issue authoring (dsh-issue-priority)
+    content: `# Issue authoring (dsh-work-planner)
 
 Issue 起票には、別々に確認する 2 つの関門があります。
 
@@ -133,6 +133,8 @@ Issue ごとに **issue_draft** を呼びます。引数:
 - ユーザーはブロックの書式を知らなくてよい。areas / size / files は会話とコードから推定して埋め、推定した値を起票後に一行で伝える。確認のために作業を止めない。
 - ブロックが壊れていると、その Issue は「ブロックなし」として扱われます（警告に出ます）。
 - 依存は GitHub の Issue dependencies（blocked by）でも登録できます。両方あれば GitHub 側が優先されます。
+- リポジトリで GitHub の Issue Fields（Priority / Effort）、Sub-issues、Milestone を使っていれば、計画はそれも読みます。Effort が入っている Issue では、\`size\` より Effort が優先されます。
+- \`acceptance\`（完了条件）は、作業を始めるエージェントにそのまま渡ります。検証できる一文で書いてください。
 - issue_draft は GitHub に書き込みません。投稿は通常の手段で行ってください。
 `,
 };
@@ -141,7 +143,7 @@ export const ISSUE_WORK_SKILL = {
     name: 'issue-work',
     description: 'Issue 対応を始めるときの手順。バックグラウンドで作られた作業パッケージ計画を issue_plan_read で読み、提示→承認→ブランチ→実装→PR(Closes #N) の順に進める。',
     whenToUse: '「Issue 対応しよう」「次なにやる？」「溜まってる Issue を片付けたい」と言われたとき。',
-    content: `# Issue work (dsh-issue-priority)
+    content: `# Issue work (dsh-work-planner)
 
 1. **issue_plan_read** を呼ぶ（古ければ自動で同期される）。
 2. 次のおすすめパッケージ（作業中があればそれ）を、含まれる Issue・順番・まとめた理由つきで短く提示し、ユーザーの承認を待つ。

@@ -1,6 +1,6 @@
 import type { IssuePlanRuntime } from './runtime.js';
 import type { Plan } from './types.js';
-export declare const RPC_CHANNEL = "/dsh-issue-priority";
+export declare const RPC_CHANNEL = "/dsh-work-planner";
 export type RpcResult = {
     ok: true;
     value: unknown;
@@ -61,6 +61,8 @@ export interface PlanView {
         withBlock: number;
         withPriority: number;
     };
+    /** How the recommendations were used so far (pre-rendered), when anything was recorded. */
+    outcomes: string | null;
 }
 export declare function createRpcHandler(deps: RpcDeps): (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<RpcResult>;
 type RawReq = AsyncIterable<Uint8Array> & {

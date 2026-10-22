@@ -37,7 +37,7 @@ const ORDER: Record<LogLevel, number> = { silent: 0, warn: 1, info: 2, debug: 3 
 export function createLogger(
   base: { warn?: (m: string) => void; info?: (m: string) => void; debug?: (m: string) => void } | Console,
   level: LogLevel,
-  prefix = '[dsh-issue-priority]',
+  prefix = '[dsh-work-planner]',
 ): Logger {
   const enabled = (min: LogLevel) => ORDER[level] >= ORDER[min]
   const write = (fn: ((m: string) => void) | undefined, fallback: (m: string) => void, message: string, fields?: Record<string, unknown>) => {

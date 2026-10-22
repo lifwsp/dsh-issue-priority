@@ -2,7 +2,7 @@
  * Local persistence (design §6): one JSON file per repository, never committed
  * to the repository itself. Writes are atomic (tmp + rename).
  */
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { PlanOutcome } from './outcomes.js'
@@ -41,9 +41,31 @@ export interface RepoState {
   outcomes: PlanOutcome[]
 }
 
+function dshHome(): string {
+  return process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
+}
+
 export function defaultDataDir(): string {
-  const home = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
-  return join(home, 'data', 'dsh-issue-priority')
+  return join(dshHome(), 'data', 'dsh-work-planner')
+}
+
+/** Where this plugin stored its plans while it was called dsh-issue-priority (≤ 0.5). */
+export function legacyDataDir(): string {
+  return join(dshHome(), 'data', 'dsh-issue-priority')
+}
+
+/**
+ * One-time carry-over after the rename: when the new directory does not exist
+ * yet, copy the old one (copy, not move, so downgrading still finds its data).
+ * Returns true when something was copied.
+ */
+export async function migrateLegacyDataDir(target: string, legacy = legacyDataDir()): Promise<boolean> {
+  if (target === legacy) return false
+  const exists = (p: string) => stat(p).then(() => true, () => false)
+  if ((await exists(target)) || !(await exists(legacy))) return false
+  await mkdir(dirname(target), { recursive: true })
+  await cp(legacy, target, { recursive: true, errorOnExist: false, force: false })
+  return true
 }
 
 export function stateFilePath(dataDir: string, repo: string): string {
@@ -89,11 +111,14 @@ function pruneJudgments(state: RepoState, max: number): void {
   state.judgments = Object.fromEntries(entries.slice(0, max))
 }
 
-export function createFileStore(dataDir: string, maxJudgments = 2000): StateStore {
+export function createFileStore(dataDir: string, maxJudgments = 2000, ready: Promise<unknown> = Promise.resolve()): StateStore {
   // Serialize writes per file so a timer sync and a tool call cannot interleave.
   const queues = new Map<string, Promise<void>>()
+  // A failed one-time preparation (legacy carry-over) must not wedge the store.
+  const prepared = ready.catch(() => undefined)
   return {
     async load(repo) {
+      await prepared
       const path = stateFilePath(dataDir, repo)
       try {
         const raw = JSON.parse(await readFile(path, 'utf8')) as Partial<RepoState>
@@ -106,6 +131,7 @@ export function createFileStore(dataDir: string, maxJudgments = 2000): StateStor
       }
     },
     async listRepos() {
+      await prepared
       let names: string[]
       try {
         names = await readdir(dataDir)
@@ -133,7 +159,7 @@ export function createFileStore(dataDir: string, maxJudgments = 2000): StateStor
         await writeFile(tmp, json, 'utf8')
         await rename(tmp, path)
       }
-      const prev = queues.get(path) ?? Promise.resolve()
+      const prev = queues.get(path) ?? prepared
       const next = prev.then(run, run)
       queues.set(path, next.catch(() => undefined))
       return next

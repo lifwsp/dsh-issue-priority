@@ -7,8 +7,9 @@
  * runtime the /issues command uses. No endpoint writes to GitHub.
  */
 import { describeEvidence, describeStep, STEP_LABEL } from './progress.js';
+import { describeOutcomes, summarizeOutcomes } from './outcomes.js';
 import { nextPackage, renderKickoff, userMessage } from './render.js';
-export const RPC_CHANNEL = '/dsh-issue-priority';
+export const RPC_CHANNEL = '/dsh-work-planner';
 const ENDPOINT_SEGMENT = /^[A-Za-z0-9_$.-]+$/;
 const MAX_REQUEST_BYTES = 1 << 20;
 function str(v) {
@@ -74,6 +75,7 @@ function view(state, plan, agent, decisionOff) {
             urls: a.evidence.flatMap((e) => (e.kind === 'pr' ? [e.url] : [])),
         })),
         signals: signalCounts(state, plan),
+        outcomes: describeOutcomes(summarizeOutcomes(state.outcomes)),
     };
 }
 function signalCounts(state, plan) {
