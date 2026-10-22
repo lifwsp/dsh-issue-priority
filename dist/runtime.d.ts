@@ -11,6 +11,8 @@ export interface RuntimeDeps {
     /** Why the decision model is unavailable (for user-facing notes), if it is. */
     decisionStatus: () => Promise<string | undefined>;
     now?: () => Date;
+    /** Local gh version for issue_draft's commands (tests inject; default runs `gh --version`). */
+    ghVersion?: () => Promise<[number, number] | null>;
 }
 export declare class IssuePlanRuntime {
     readonly deps: RuntimeDeps;

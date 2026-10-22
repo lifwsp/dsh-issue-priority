@@ -1,11 +1,14 @@
 /**
  * Agent tools (design §7):
- * - issue_draft:       validate + render a dsh-plan block (never writes to GitHub)
+ * - issue_draft:       validate + render a dsh-plan block and the gh commands that record
+ *                      dependencies / parent / milestone / priority in GitHub (never writes itself)
  * - issue_plan_read:   read the stored plan (syncs if stale)
  * - issue_plan_update: record local overrides / dependencies / in-progress
  */
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { detectGhVersion, planAuthoring, repoFeatures, supportsRelations, type RepoFeatures } from './github/authoring.js'
 import { attachPlanBlock, renderPlanBlock, validatePlanBlock } from './plan-block.js'
+import type { IssueRecord, PriorityLevel } from './types.js'
 import { nextPackage, renderPlan } from './render.js'
 import type { IssuePlanRuntime } from './runtime.js'
 
@@ -23,7 +26,9 @@ export function createIssueDraftTool(runtime: IssuePlanRuntime) {
       'ALWAYS call this before creating or editing any GitHub Issue (gh issue create/edit, GitHub API, MCP, etc.), ' +
       'even when the user just says "Issue 起票して" / "file an issue" without mentioning the plan block. ' +
       'Returns the final body (block appended/replaced) plus the known `areas` vocabulary — reuse those names. ' +
-      'Does NOT create the Issue; post the returned body yourself (e.g. `gh issue create --body-file`). ' +
+      'Does NOT create the Issue: it returns `commands` — save `body` to body.md and run them. They record dependencies, parent (sub-issue), ' +
+      'milestone and priority in GitHub\'s own features (Issue Dependencies, Sub-issues, Milestones, Priority field or labels), ' +
+      'so the dsh-plan block keeps only what GitHub has no place for (areas, files, acceptance, size). ' +
       'A valid block only proves the FORMAT, not that the issue is a sensible unit: design the issue units first ' +
       '(issue-authoring skill) — one primary outcome per issue that can be prioritized, accepted/rejected, started, verified and closed on its own. ' +
       'Do not bundle independent findings just because they came from the same request, screen or conversation; ' +
@@ -35,7 +40,11 @@ export function createIssueDraftTool(runtime: IssuePlanRuntime) {
       areas: { type: 'array', items: { type: 'string' }, required: true, description: 'Kebab-case area names, e.g. ["auth","ui"]. Prefer existing names.' },
       size: { type: 'string', enum: ['S', 'M', 'L'], required: true, description: 'S ≈ under an hour, M ≈ half a day, L ≈ a day or more.' },
       files: { type: 'array', items: { type: 'string' }, description: 'Repo-relative paths or globs likely to change (e.g. src/auth/**).' },
-      dependsOn: { type: 'array', items: { type: 'integer' }, description: 'Issue numbers that must be done first. Merely related issues belong as links in the body, not here.' },
+      dependsOn: { type: 'array', items: { type: 'integer' }, description: 'Issue numbers that must be done first (recorded as GitHub "blocked by"). Merely related issues belong as links in the body, not here.' },
+      parent: { type: 'integer', description: 'Parent issue when this is one part of a larger outcome split into sub-issues (recorded as a GitHub sub-issue). The parent waits for its sub-issues in the plan.' },
+      milestone: { type: 'string', description: 'Existing milestone (release / deadline) this issue belongs to. Issues in different milestones are never bundled.' },
+      priority: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Importance, only when the user said so or it is clear (recorded as the Priority field or a priority label).' },
+      issue: { type: 'integer', description: 'Number of the existing issue when editing; omit when creating.' },
       acceptance: { type: 'string', description: 'One-line acceptance criterion for this issue\'s single primary outcome (not a list of separate items to consider).' },
       repo: { type: 'string', description: 'owner/name. Default: detected from the session working directory.' },
     },
@@ -44,9 +53,14 @@ export function createIssueDraftTool(runtime: IssuePlanRuntime) {
     async execute(args, exec) {
       let repo: string | null = null
       let known: string[] = []
+      let features: RepoFeatures = repoFeatures([])
+      let existing: IssueRecord | undefined
       try {
         repo = await runtime.resolveRepoFor(exec.agent, args.repo)
-        known = (await runtime.deps.store.load(repo)).areas
+        const state = await runtime.deps.store.load(repo)
+        known = state.areas
+        features = repoFeatures(Object.values(state.issues))
+        if (args.issue !== undefined) existing = state.issues[String(args.issue)]
       } catch {
         // Area vocabulary is advisory; drafting works without a repo.
       }
@@ -65,6 +79,33 @@ export function createIssueDraftTool(runtime: IssuePlanRuntime) {
           text: `dsh-plan ブロックが不正です:\n- ${result.errors.join('\n- ')}\n既知の areas: ${known.join(', ') || '(なし)'}`,
         })
       }
+      const ghRelations = supportsRelations(await (runtime.deps.ghVersion ?? detectGhVersion)())
+      const authoring = planAuthoring({
+        repo,
+        title: args.title,
+        ...(args.issue !== undefined ? { issue: args.issue } : {}),
+        dependsOn: result.block.dependsOn,
+        ...(args.parent !== undefined ? { parent: args.parent } : {}),
+        ...(args.milestone?.trim() ? { milestone: args.milestone.trim() } : {}),
+        ...(args.priority ? { priority: args.priority as PriorityLevel } : {}),
+        ...(existing
+          ? {
+              existing: {
+                blockedBy: existing.nativeBlockedBy,
+                ...(existing.native?.parent !== undefined ? { parent: existing.native.parent } : {}),
+                ...(existing.native?.milestone ? { milestone: existing.native.milestone.title } : {}),
+                labels: existing.labels,
+              },
+            }
+          : {}),
+        ghRelations,
+        features,
+      })
+      // Dependencies live in GitHub when gh can record them; the block keeps them only as a fallback.
+      result.block.dependsOn = authoring.blockDependsOn
+      if (features.effortField) {
+        authoring.notes.push('このリポジトリは Effort フィールドを使っています。計画は size より Effort を優先するので、Effort も設定してください。')
+      }
       const unknownAreas = result.block.areas.filter((a) => !known.includes(a))
       if (repo && unknownAreas.length) {
         // Register new names so later drafts converge on the same vocabulary.
@@ -80,11 +121,16 @@ export function createIssueDraftTool(runtime: IssuePlanRuntime) {
         block: renderPlanBlock(result.block),
         knownAreas: known,
         newAreas: unknownAreas,
+        commands: authoring.commands,
+        notes: authoring.notes,
         text: [
           `タイトル: ${args.title}`,
           unknownAreas.length && known.length ? `新しい area を登録: ${unknownAreas.join(', ')}（既存: ${known.join(', ')}）` : '',
-          '--- body ---',
+          '--- body（body.md に保存） ---',
           body,
+          '--- 実行するコマンド ---',
+          ...authoring.commands,
+          ...(authoring.notes.length ? ['--- 注意 ---', ...authoring.notes.map((n) => `- ${n}`)] : []),
         ]
           .filter(Boolean)
           .join('\n'),

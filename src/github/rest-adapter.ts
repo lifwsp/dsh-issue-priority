@@ -10,7 +10,7 @@ import {
 import type { NativeMeta } from '../types.js'
 
 const DEFAULT_API_BASE = 'https://api.github.com'
-const USER_AGENT = 'dsh-work-planner/0.6.0'
+const USER_AGENT = 'dsh-work-planner/0.7.0'
 const RETRYABLE = new Set([403, 429])
 
 export interface RestGitHubAdapterOptions {
