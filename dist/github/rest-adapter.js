@@ -1,6 +1,6 @@
 import { GitHubAdapterError } from './adapter.js';
 const DEFAULT_API_BASE = 'https://api.github.com';
-const USER_AGENT = 'dsh-issue-priority/0.4.0';
+const USER_AGENT = 'dsh-issue-priority/0.5.0';
 const RETRYABLE = new Set([403, 429]);
 function sleep(ms, signal) {
     return new Promise((resolve, reject) => {
@@ -66,7 +66,7 @@ export class RestGitHubAdapter {
         this.token = options.token;
         this.baseUrl = (options.baseUrl ?? DEFAULT_API_BASE).replace(/\/$/, '');
         this.maxRetries = options.maxRetries ?? 3;
-        this.maxCommentPages = options.maxCommentPages ?? 1;
+        this.maxCommentPages = options.maxCommentPages ?? 3;
         this.concurrency = options.concurrency ?? 4;
     }
     getUsedMethods() {
@@ -115,6 +115,8 @@ export class RestGitHubAdapter {
                 number: raw.number,
                 title: raw.title,
                 body: raw.body ?? '',
+                author: raw.user?.login ?? '',
+                createdAt: raw.created_at,
                 htmlUrl: raw.html_url,
                 state: raw.state === 'closed' ? 'closed' : 'open',
                 labels: (raw.labels ?? [])
@@ -128,17 +130,24 @@ export class RestGitHubAdapter {
         });
     }
     async fetchCommentBodies(owner, name, issueNumber, signal) {
-        const bodies = [];
+        const out = [];
         for (let page = 1; page <= this.maxCommentPages; page += 1) {
-            const batch = (await this.request('GET', `/repos/${owner}/${name}/issues/${issueNumber}/comments`, { query: { per_page: '30', page: String(page) }, signal })) ?? [];
+            const batch = (await this.request('GET', `/repos/${owner}/${name}/issues/${issueNumber}/comments`, { query: { per_page: '100', page: String(page) }, signal })) ?? [];
             for (const c of batch) {
-                if (c.body)
-                    bodies.push(c.body);
+                if (!c.body)
+                    continue;
+                const login = c.user?.login ?? '';
+                out.push({
+                    author: login,
+                    createdAt: c.created_at ?? '',
+                    body: c.body,
+                    bot: c.user?.type === 'Bot' || login.endsWith('[bot]'),
+                });
             }
-            if (batch.length < 30)
+            if (batch.length < 100)
                 break;
         }
-        return bodies;
+        return out;
     }
     /** GitHub issue dependencies (REST, 2025+). Missing feature/permission → []. */
     async fetchBlockedBy(owner, name, issueNumber, signal) {

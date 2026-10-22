@@ -1,8 +1,19 @@
+/** One issue comment, oldest first. */
+export interface IssueComment {
+  author: string
+  createdAt: string
+  body: string
+  /** Posted by a bot account (CI, Dependabot, …). */
+  bot: boolean
+}
+
 /** Normalized raw Issue as fetched from GitHub (before plan-block parsing). */
 export interface FetchedIssue {
   number: number
   title: string
   body: string
+  author?: string
+  createdAt?: string
   htmlUrl: string
   state: 'open' | 'closed'
   labels: string[]
@@ -10,8 +21,8 @@ export interface FetchedIssue {
   closedAt: string | null
   /** GitHub native "blocked by" (same repo only). */
   nativeBlockedBy: number[]
-  /** Comment bodies (only fetched when the issue has comments). */
-  comments: string[]
+  /** Comments, oldest first (only fetched when the issue has comments). */
+  comments: IssueComment[]
 }
 
 export interface ListIssuesSinceOptions {

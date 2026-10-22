@@ -15,7 +15,7 @@ import type { Logger } from './log.js'
 import { parsePlanBlock, stripPlanBlock } from './plan-block.js'
 import { buildPlan } from './plan/planner.js'
 import type { RepoState, StateStore } from './store.js'
-import type { IssueRecord, Plan } from './types.js'
+import type { IssueRecord, Plan, ThreadPost } from './types.js'
 
 const execFileAsync = promisify(execFile)
 const MENTION_RE = /(?:^|[^\w/&])#(\d+)\b/g
@@ -49,14 +49,38 @@ export interface SyncResult {
   unchanged: boolean
 }
 
+const MAX_THREAD_POSTS = 20
+const MAX_POST_CHARS = 800
+
+/** Collapse fenced code / long log lines so a comment carries its words, not its paste. */
+export function condenseComment(text: string): string {
+  const out = text
+    .replace(/```[\s\S]*?```/g, '[code]')
+    .replace(/<details>[\s\S]*?<\/details>/gi, '[details]')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .split('\n')
+    .map((l) => (l.length > 300 ? `${l.slice(0, 300)}…` : l))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  return out.length > MAX_POST_CHARS ? `${out.slice(0, MAX_POST_CHARS)}…` : out
+}
+
 export function toIssueRecord(raw: FetchedIssue): IssueRecord {
   const parsed = parsePlanBlock(raw.body)
   const body = stripPlanBlock(raw.body)
-  const deps = parseDependencies([body, ...raw.comments])
+  const human = raw.comments.filter((c) => !c.bot)
+  const deps = parseDependencies([body, ...human.map((c) => c.body)])
+  const thread: ThreadPost[] = human
+    .map((c) => ({ by: c.author, at: c.createdAt, text: condenseComment(c.body) }))
+    .filter((c) => c.text)
+    .slice(-MAX_THREAD_POSTS)
   const mentions = new Set<number>()
-  for (const m of body.matchAll(MENTION_RE)) {
-    const n = Number(m[1])
-    if (n !== raw.number) mentions.add(n)
+  for (const text of [body, ...human.map((c) => c.body)]) {
+    for (const m of text.matchAll(MENTION_RE)) {
+      const n = Number(m[1])
+      if (n !== raw.number) mentions.add(n)
+    }
   }
   return {
     number: raw.number,
@@ -72,6 +96,9 @@ export function toIssueRecord(raw: FetchedIssue): IssueRecord {
     nativeBlockedBy: [...new Set(raw.nativeBlockedBy)].sort((a, b) => a - b),
     textBlockedBy: deps.blockedBy.filter((n) => n !== raw.number),
     mentions: [...mentions].sort((a, b) => a - b),
+    thread,
+    ...(raw.author ? { author: raw.author } : {}),
+    ...(raw.createdAt ? { createdAt: raw.createdAt } : {}),
   }
 }
 
@@ -170,7 +197,9 @@ export class SyncService {
     const { store, logger } = this.deps
     const settings = this.deps.settings()
     const state = await store.load(repo)
-    const since = options.full ? undefined : (state.syncedUntil ?? undefined)
+    // Records saved before v0.5 lack comments: refetch everything once.
+    const backfill = Object.values(state.issues).some((i) => i.thread === undefined)
+    const since = options.full || backfill ? undefined : (state.syncedUntil ?? undefined)
 
     let fetched: FetchedIssue[]
     try {
@@ -211,7 +240,7 @@ export class SyncService {
         }
         continue
       }
-      if (prev && prev.updatedAt === raw.updatedAt) continue
+      if (prev && prev.updatedAt === raw.updatedAt && prev.thread !== undefined) continue
       state.issues[key] = toIssueRecord(raw)
       changed.push(raw.number)
     }

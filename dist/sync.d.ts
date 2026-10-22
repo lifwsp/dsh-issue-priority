@@ -29,6 +29,8 @@ export interface SyncResult {
     /** True when nothing changed on GitHub and no replan was required. */
     unchanged: boolean;
 }
+/** Collapse fenced code / long log lines so a comment carries its words, not its paste. */
+export declare function condenseComment(text: string): string;
 export declare function toIssueRecord(raw: FetchedIssue): IssueRecord;
 /** `owner/repo` from the git remote of a directory (origin first, then any GitHub remote). */
 export declare function detectRepo(cwd: string): Promise<string | null>;

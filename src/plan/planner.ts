@@ -24,7 +24,8 @@ import { fileOverlap } from './files.js'
 import { labelPriority, textSimilarity } from './signals.js'
 
 /** Bump when planning logic changes so stored plans are rebuilt. */
-export const PLANNER_VERSION = 2
+export const PLANNER_VERSION = 3
+const STILL_BLOCKED_THRESHOLD = 0.5
 
 export interface PlannerOptions {
   repo: string
@@ -241,8 +242,24 @@ export async function buildPlan(options: PlannerOptions): Promise<Plan> {
     for (const d of issue.textBlockedBy) addEdge(issue.number, d, 'text')
   }
   for (const l of options.localDependencies) addEdge(l.issue, l.dependsOn, 'local')
+  // Dependencies only found as free text (body or comments) are re-read against
+  // the whole thread: a later comment may have dropped them.
+  const dropped = new Set<string>()
+  const textEdges = edges.filter((e) => e.source === 'text' && byNumber.has(e.to))
+  await mapPool(textEdges, 4, async (e) => {
+    if (!budgetLeft()) {
+      if (judge.available) skippedForBudget += 1
+      return
+    }
+    const j = await judge.stillBlocked(byNumber.get(e.from)!, e.to, signal)
+    if (j && j.p < STILL_BLOCKED_THRESHOLD) {
+      dropped.add(`${e.from}->${e.to}`)
+      warnings.push({ issue: e.from, kind: 'dependency-dropped', detail: `#${e.to} 待ちは解消済みと判断（スレッドを読んだ結果）` })
+    }
+  })
+  for (const k of dropped) edgeKey.delete(k)
   // Dependencies on issues that are not open (closed, other repo, unknown) are satisfied.
-  const hard = edges.filter((e) => byNumber.has(e.to))
+  const hard = edges.filter((e) => byNumber.has(e.to) && !dropped.has(`${e.from}->${e.to}`))
 
   // ── 3. cycles → needsHuman ──────────────────────────────────────────────
   const adj = new Map<number, Set<number>>()

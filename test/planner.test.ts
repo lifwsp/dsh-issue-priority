@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createJudge } from '../src/decision/judge.js'
+import { createJudge, issueThread } from '../src/decision/judge.js'
 import { buildPlan, type PlannerOptions } from '../src/plan/planner.js'
 import { block, FakeDecision, rec } from './helpers.js'
 
@@ -189,5 +189,48 @@ describe('buildPlan', () => {
     const off = await buildPlan(base({ issues: [rec(1)], previous: first }))
     expect(off.decision.model).toBeUndefined()
   })
-})
 
+  it('drops a text dependency when the thread says it no longer holds', async () => {
+    const client = new FakeDecision((qid, req) => {
+      if (qid === 'blocked') {
+        const thread = (req.state as { thread: Array<{ text: string }> }).thread
+        return { type: 'noul', noul: thread.some((p) => p.text.includes('no longer')) ? 0.02 : 0.98 }
+      }
+      if (qid === 'actionable') return { type: 'noul', noul: 0.9 }
+      if (qid === 'merge') return { type: 'noul', noul: 0.1 }
+      return { type: 'score', score: 1 }
+    })
+    const judge = createJudge(client, new Map() as never)
+    const plan = await buildPlan(
+      base({
+        judge,
+        issues: [
+          rec(1),
+          rec(2, { body: 'blocked by #1', textBlockedBy: [1], thread: [{ by: 'a', at: '2026-10-05', text: 'no longer depends on #1' }] }),
+          rec(3, { body: 'blocked by #1', textBlockedBy: [1], thread: [] }),
+        ],
+      }),
+    )
+    expect(pkgOf(plan, 2)?.status).toBe('ready')
+    expect(pkgOf(plan, 3)?.status).toBe('waiting')
+    expect(plan.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ issue: 2, kind: 'dependency-dropped' })]))
+    // Without a model the text dependency is kept as written.
+    const offline = await buildPlan(base({ issues: [rec(1), rec(2, { textBlockedBy: [1], thread: [{ by: 'a', at: '', text: 'no longer' }] })] }))
+    expect(pkgOf(offline, 2)?.status).toBe('waiting')
+  })
+
+  it('sends body and comments as one thread, keeping the body head and newest comments', () => {
+    const short = issueThread(rec(1, { body: 'body', author: 'me', createdAt: '2026-10-01T00:00:00Z', thread: [{ by: 'a', at: '2026-10-02T00:00:00Z', text: 'c1' }] }))
+    expect(short).toEqual([
+      { by: 'me (issue body)', at: '2026-10-01', text: 'body' },
+      { by: 'a', at: '2026-10-02', text: 'c1' },
+    ])
+    const long = issueThread(
+      rec(1, { body: 'B'.repeat(3000), thread: Array.from({ length: 10 }, (_, i) => ({ by: 'u', at: '', text: `c${i} ` + 'x'.repeat(500) })) }),
+    )
+    expect(long[0]!.text.length).toBeLessThanOrEqual(1501)
+    expect(long.at(-1)!.text.startsWith('c9 ')).toBe(true)
+    expect(long.some((p) => p.text.includes('omitted'))).toBe(true)
+    expect(long.reduce((s, p) => s + p.text.length, 0)).toBeLessThanOrEqual(4100)
+  })
+})

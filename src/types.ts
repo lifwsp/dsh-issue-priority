@@ -14,6 +14,13 @@ export interface PlanBlock {
   acceptance?: string
 }
 
+/** One comment kept for judgment input (bots removed, code collapsed, trimmed). */
+export interface ThreadPost {
+  by: string
+  at: string
+  text: string
+}
+
 /** One Issue as kept in the local snapshot. */
 export interface IssueRecord {
   number: number
@@ -31,9 +38,17 @@ export interface IssueRecord {
   blockError?: string
   /** GitHub native "blocked by" issue numbers (same repo). */
   nativeBlockedBy: number[]
-  /** `blocked by #N` style phrases in body / comments. */
+  /** `blocked by #N` style phrases in body / human comments. */
   textBlockedBy: number[]
-  /** Every `#N` mentioned in the body (for mutual-mention detection). */
+  /**
+   * Human comments, oldest first. Absent on records saved before v0.5 (the
+   * next sync then refetches everything once).
+   */
+  thread?: ThreadPost[]
+  /** Issue author login (labels the body in the thread). */
+  author?: string
+  createdAt?: string
+  /** Every `#N` mentioned in the body or human comments (for mutual-mention detection). */
   mentions: number[]
 }
 
@@ -90,7 +105,7 @@ export interface NeedsHuman {
 
 export interface PlanWarning {
   issue: number
-  kind: 'invalid-block' | 'unknown-area' | 'judge-failed'
+  kind: 'invalid-block' | 'unknown-area' | 'judge-failed' | 'dependency-dropped'
   detail: string
 }
 

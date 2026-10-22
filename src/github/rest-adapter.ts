@@ -1,7 +1,7 @@
-import { GitHubAdapterError, type FetchedIssue, type GitHubIssueSource, type ListIssuesSinceOptions } from './adapter.js'
+import { GitHubAdapterError, type FetchedIssue, type IssueComment, type GitHubIssueSource, type ListIssuesSinceOptions } from './adapter.js'
 
 const DEFAULT_API_BASE = 'https://api.github.com'
-const USER_AGENT = 'dsh-issue-priority/0.4.0'
+const USER_AGENT = 'dsh-issue-priority/0.5.0'
 const RETRYABLE = new Set([403, 429])
 
 export interface RestGitHubAdapterOptions {
@@ -24,6 +24,7 @@ interface GhIssueRaw {
   assignees: Array<{ login: string }>
   created_at: string
   updated_at: string
+  user?: { login?: string }
   comments: number
   pull_request?: unknown
   state: string
@@ -39,7 +40,7 @@ interface GhDependencyRaw {
 
 interface GhCommentRaw {
   body?: string
-  user?: { login?: string }
+  user?: { login?: string; type?: string }
   created_at?: string
 }
 
@@ -114,7 +115,7 @@ export class RestGitHubAdapter implements GitHubIssueSource {
     this.token = options.token
     this.baseUrl = (options.baseUrl ?? DEFAULT_API_BASE).replace(/\/$/, '')
     this.maxRetries = options.maxRetries ?? 3
-    this.maxCommentPages = options.maxCommentPages ?? 1
+    this.maxCommentPages = options.maxCommentPages ?? 3
     this.concurrency = options.concurrency ?? 4
   }
 
@@ -166,6 +167,8 @@ export class RestGitHubAdapter implements GitHubIssueSource {
         number: raw.number,
         title: raw.title,
         body: raw.body ?? '',
+        author: raw.user?.login ?? '',
+        createdAt: raw.created_at,
         htmlUrl: raw.html_url,
         state: raw.state === 'closed' ? 'closed' : 'open',
         labels: (raw.labels ?? [])
@@ -184,20 +187,27 @@ export class RestGitHubAdapter implements GitHubIssueSource {
     name: string,
     issueNumber: number,
     signal?: AbortSignal,
-  ): Promise<string[]> {
-    const bodies: string[] = []
+  ): Promise<IssueComment[]> {
+    const out: IssueComment[] = []
     for (let page = 1; page <= this.maxCommentPages; page += 1) {
       const batch = (await this.request<GhCommentRaw[]>(
         'GET',
         `/repos/${owner}/${name}/issues/${issueNumber}/comments`,
-        { query: { per_page: '30', page: String(page) }, signal },
+        { query: { per_page: '100', page: String(page) }, signal },
       )) ?? []
       for (const c of batch) {
-        if (c.body) bodies.push(c.body)
+        if (!c.body) continue
+        const login = c.user?.login ?? ''
+        out.push({
+          author: login,
+          createdAt: c.created_at ?? '',
+          body: c.body,
+          bot: c.user?.type === 'Bot' || login.endsWith('[bot]'),
+        })
       }
-      if (batch.length < 30) break
+      if (batch.length < 100) break
     }
-    return bodies
+    return out
   }
 
   /** GitHub issue dependencies (REST, 2025+). Missing feature/permission → []. */

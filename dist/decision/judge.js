@@ -10,17 +10,54 @@
  */
 import { createHash } from 'node:crypto';
 /** Bump when question wording changes so cached answers are re-asked. */
-export const QUESTION_VERSION = 'q1';
-const BODY_LIMIT = 1200;
+export const QUESTION_VERSION = 'q2';
+/** Total characters of body + comments sent per issue. */
+const THREAD_LIMIT = 4000;
+const BODY_HEAD = 1500;
 function hash(parts) {
     return createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 24);
+}
+/**
+ * The issue as one chronological thread: the body is the first post, comments
+ * follow oldest first. Body and comments are equal inputs; when the total is
+ * too long the body keeps its head and the newest comments are kept, dropping
+ * the middle of the discussion (conclusions tend to be at the end).
+ */
+export function issueThread(issue, limit = THREAD_LIMIT) {
+    const day = (iso) => (iso ? iso.slice(0, 10) : '');
+    const comments = (issue.thread ?? []).map((c) => ({ by: c.by, at: day(c.at), text: c.text }));
+    const bodyText = issue.body.trim();
+    const body = { by: `${issue.author ?? 'author'} (issue body)`, at: day(issue.createdAt), text: bodyText };
+    const total = bodyText.length + comments.reduce((s, c) => s + c.text.length, 0);
+    if (total <= limit)
+        return [body, ...comments];
+    const head = bodyText.length > BODY_HEAD ? `${bodyText.slice(0, BODY_HEAD)}…` : bodyText;
+    let room = limit - head.length;
+    const kept = [];
+    for (let i = comments.length - 1; i >= 0; i -= 1) {
+        const c = comments[i];
+        if (c.text.length > room) {
+            if (room > 200)
+                kept.unshift({ ...c, text: `${c.text.slice(0, room)}…` });
+            break;
+        }
+        kept.unshift(c);
+        room -= c.text.length;
+    }
+    const omitted = comments.length - kept.length;
+    return [
+        { ...body, text: head },
+        ...(omitted > 0 ? [{ by: '', at: '', text: `[${omitted} earlier comment(s) omitted]` }] : []),
+        ...kept,
+    ];
 }
 function issueState(issue) {
     return {
         number: issue.number,
         title: issue.title,
         labels: issue.labels,
-        body: issue.body.length > BODY_LIMIT ? `${issue.body.slice(0, BODY_LIMIT)}…` : issue.body,
+        note: 'thread is in chronological order; when a later post changes scope, priority or dependencies, the later post wins',
+        thread: issueThread(issue),
         ...(issue.block ? { areas: issue.block.areas, files: issue.block.files } : {}),
     };
 }
@@ -69,6 +106,14 @@ const DIRECTION_Q = {
         none: 'Order does not matter',
     },
 };
+const stillBlockedQ = (dep) => ({
+    type: 'noul',
+    instructions: `Read the thread in order; later posts override earlier ones. As of the latest post, must issue #${dep} be finished before work on this issue can start?`,
+    criteria: {
+        true: `Yes, #${dep} is still a prerequisite`,
+        false: `No, the dependency on #${dep} was dropped, resolved differently, or never really existed`,
+    },
+});
 function scoreToSize(answer) {
     if (!answer || answer.type !== 'score' || !Number.isFinite(answer.score))
         return null;
@@ -170,6 +215,14 @@ export function createJudge(client, store, providerLabel) {
                 const choice = ans.choice === 'a-first' || ans.choice === 'b-first' ? ans.choice : 'none';
                 const p = ans.probabilities[ans.choice] ?? ans.confidence ?? 0;
                 return { choice, p };
+            });
+        },
+        stillBlocked(issue, dep, signal) {
+            const state = issueState(issue);
+            return cached(`blocked:${QUESTION_VERSION}:${scope}:${issue.number}-${dep}:${hash(state)}`, async () => {
+                const answers = await ask(state, { blocked: stillBlockedQ(dep) }, signal);
+                const p = noulValue(answers?.blocked);
+                return p === null ? null : { p };
             });
         },
     };

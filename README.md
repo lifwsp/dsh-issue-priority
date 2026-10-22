@@ -18,7 +18,7 @@ dsh plugin --profile web add github:lifwsp/dsh-issue-priority
 
 既定では Decision Model を使いません。この状態でも動きますが、規模や重要度は見積もらず、依存関係と Issue 番号の順に並びます。
 
-Decision Model を使うときは、呼び先と API キーを設定し、`allowExternalJudgment` を `true` にします。`true` にすると、Issue のタイトルと本文が呼び先に送られます。
+Decision Model を使うときは、呼び先と API キーを設定し、`allowExternalJudgment` を `true` にします。`true` にすると、Issue のタイトル・ラベル・本文と、人が書いたコメントが呼び先に送られます。
 
 ```yaml
 # cordis.patch.yml
@@ -74,7 +74,7 @@ dependsOn: 12
 
 ## 順番の決め方
 
-- 「#12 の後」のように依存関係が書かれている Issue は、相手が閉じるまで **先行待ち** になります。依存は GitHub の Issue 依存（blocked by）、上の `dependsOn`、本文の `blocked by #12` から読み取ります。
+- 「#12 の後」のように依存関係が書かれている Issue は、相手が閉じるまで **先行待ち** になります。依存は GitHub の Issue 依存（blocked by）、上の `dependsOn`、本文やコメントの `blocked by #12` から読み取ります。本文やコメントから読み取った依存は、Decision Model がスレッド全体を読み、後のコメントで取り消されていれば外します。
 - すぐ着手できるパッケージどうしは、**優先** を付けたもの、重要度が高いもの、規模が小さいものの順に並べます。重要度は `priority:high` などのラベルがあればそれを使い、なければ Decision Model が見積もります。
 - **後回し** を付けたものは最後に回します。
 
