@@ -1,93 +1,98 @@
 # dsh-issue-priority
 
-GitHub の Issue を定期的に読み、一緒に片付けられるものをまとめて、着手する順番を決めておく DeepSeek Harness（DSH）用プラグインです。次にやることはサイドバーに表示され、ボタンひとつでエージェントに渡せます。
+**リポジトリの GitHub Issue を、着手する順番に並べておく DSH プラグインです。** 一緒に片付けられる Issue は、ひとつの作業単位（パッケージ）にまとめます。次にやるパッケージがサイドバーに出るので、ボタンを押せばエージェントがその作業を始めます。
 
-- 判定には判定専用モデル [LiquidAI d1](https://www.liquid.ai/blog/d1-decision-model) を使います。チャット用の LLM は使いません。
-- GitHub には書き込みません。
+並べ替えは 1 時間ごとに裏で行います。規模や重要度の見積もりには Decision Model を使い、チャット用の LLM は使いません。GitHub には書き込みません。
 
 ## インストール
 
 ```bash
-git clone https://github.com/lifwsp/dsh-issue-priority.git
-cd dsh-issue-priority
-pnpm install && pnpm build
-dsh plugin add link:$(pwd)
+dsh plugin --profile web add github:lifwsp/dsh-issue-priority
 ```
+
+`web` は使っているプロファイル名に置き換えてください。外すときは `dsh plugin --profile web remove dsh-issue-priority` です。
+
+サイドバーのタブを使うには [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) が必要です。
 
 ## 設定
 
-1. OpenRouter の API キーを `OPENROUTER_API_KEY` として、DSH の認証情報（`~/.dsh/.credentials.yaml` の `refs:`）か環境変数に設定します。
-2. プロファイルの `cordis.patch.yml` に次を追加します。
+Decision Model を使うには、次の 2 つが必要です。
 
-   ```yaml
-   - id: dsh-issue-priority
-     name: dsh-issue-priority
-     config:
-       allowExternalJudgment: true
-   ```
+1. OpenRouter の API キーを `OPENROUTER_API_KEY` という名前で登録する（DSH の認証情報か環境変数）。
+2. プラグインの設定で `allowExternalJudgment` を `true` にする。
 
-   `allowExternalJudgment: true` にすると、Issue のタイトルと本文が判定モデルに送られます。`false`（既定）のままでも動きますが、並び順は依存関係と Issue 番号だけで決まります。
+```yaml
+# cordis.patch.yml
+- id: dsh-issue-priority
+  name: dsh-issue-priority
+  config:
+    allowExternalJudgment: true
+```
 
-3. DSH を再起動します。
+`allowExternalJudgment` を `true` にすると、Issue のタイトルと本文が OpenRouter に送られます。`false`（既定）のままでも動きますが、規模や重要度は見積もらず、Issue 番号の順に並びます。
 
 ## 使い方
 
-### サイドバー
+1. リポジトリを開いたセッションで、右サイドバーの「+」から **Issue 計画** タブを開きます。
+2. いちばん上の **次はこれ** が、次に着手するパッケージです。**これに着手** を押すと、エージェントが方針を示します。承認すると、ブランチを切って実装し、`Closes #N` 付きの PR を出します。
+3. 順番を変えたいときは、Issue の横の **優先** / **後回し** を押します。
 
-[dsh-better-sidebar](https://www.npmjs.com/package/dsh-better-sidebar) を入れていると、右サイドバーの「+」から「Issue 計画」タブを開けます。
+丸いアイコンにマウスを乗せると、そのパッケージを選んだ理由や同期の状態が見えます。アイコンが **!** のときは、確認したほうがよいことがあります。
 
-- **次はこれ**: いま着手すべきパッケージ。「これに着手」でエージェントに渡します。
-- **そのあと**: 残りのパッケージ。
-- **優先 / 後回し**: Issue ごとに順番を調整します。
-- **同期**: GitHub から今すぐ読み直します。
-- 丸いアイコンにマウスを置くと、選んだ理由や同期の状態が見えます。確認が必要なことがあるときは「!」になります。
-
-表示するのは、開いているセッションの作業ディレクトリのリポジトリです。
-
-### コマンド
+タブの代わりにコマンドでも操作できます。
 
 | コマンド | 内容 |
 | --- | --- |
-| `/issues` | 計画を表示 |
-| `/issues next [ID]` | 次のパッケージをエージェントに渡す |
+| `/issues` | 計画を表示する |
+| `/issues next [ID]` | 次のパッケージ（または ID のパッケージ）をエージェントに渡す |
 | `/issues pin N` / `defer N` / `clear N` | Issue N を優先 / 後回し / 元に戻す |
 | `/issues done` | 作業中の印を外す |
-| `/issues sync` | 今すぐ同期 |
+| `/issues sync` | 今すぐ GitHub と同期する |
 
-### Issue の起票
+## Issue の起票への影響
 
-エージェントに「Issue 起票して」と頼めば、計画に使う情報（規模・領域・関係するファイル・依存）が本文の末尾に自動で付きます。付いていない Issue も計画に入ります。
+このプラグインを入れると、エージェントが Issue を作成・編集するとき、本文の末尾に次のような HTML コメントを追加するようになります。GitHub の画面には表示されません。
 
-## 並び順
+```markdown
+<!-- dsh-plan
+v: 1
+areas: auth, ui
+size: M
+files: src/auth/**
+dependsOn: 12
+-->
+```
 
-依存関係を守ったうえで、次の順に並べます。
+中身はエージェントが会話とコードから推定して書きます。このプラグインは、ここに書かれた規模・関係するファイル・依存関係を、まとめ方と順番の根拠に使います。コメントのない Issue も計画に入ります。
 
-1. 作業中 → 優先 → 通常 → 後回し
-2. 重要度（`priority:high` などのラベル。なければ判定モデルが推定）
-3. 終わらせると着手できるようになるパッケージが多いもの
-4. 規模が小さいもの
+## 順番の決め方
 
-## 設定項目
+- 「#12 の後」のように依存関係が書かれている Issue は、相手が閉じるまで **先行待ち** になります。依存は GitHub の Issue 依存（blocked by）、上の `dependsOn`、本文の `blocked by #12` から読み取ります。
+- すぐ着手できるパッケージどうしは、**優先** を付けたもの、重要度が高いもの、規模が小さいものの順に並べます。重要度は `priority:high` などのラベルがあればそれを使い、なければ Decision Model が見積もります。
+- **後回し** を付けたものは最後に回します。
+
+## 主な設定項目
 
 | キー | 既定値 | 内容 |
 | --- | --- | --- |
-| `allowExternalJudgment` | `false` | 判定モデルを使うかどうか |
+| `allowExternalJudgment` | `false` | Decision Model に Issue を送ってよいか |
 | `decisionProvider` | `openrouter` | `openrouter` / `liquid` / `typesafe` / `custom` / `none` |
-| `decisionModel` | `''` | モデル ID（空なら `liquid/d1`） |
-| `decisionApiUrl` | `''` | `custom` のときの URL |
-| `decisionApiKeyRef` | `''` | API キーの名前（空なら呼び先に応じた既定名） |
-| `syncIntervalMinutes` | `60` | 同期の間隔（分）。0 で停止 |
+| `decisionModel` | （呼び先ごとの既定） | 使うモデルの ID |
+| `syncIntervalMinutes` | `60` | 同期の間隔（分）。`0` で止める |
 | `maxIssues` | `300` | 1 回の同期で読む Issue の上限 |
-| `maxQuestionsPerSync` | `200` | 1 回の同期で判定モデルに聞く上限 |
-| `maxPackageSize` | `4` | 1 パッケージの規模の上限（S=1, M=2, L=4） |
-| `githubTokenRef` | `GITHUB_TOKEN` | GitHub トークンの名前。なければ `GH_TOKEN`、`gh auth token` を使う |
-| `dataDir` | `''` | 計画の保存先（空なら `$DSH_HOME/data/dsh-issue-priority`） |
+| `githubTokenRef` | `GITHUB_TOKEN` | GitHub トークンの名前。見つからなければ `GH_TOKEN`、`gh auth token` を使う |
+
+ほかの項目は [src/config.ts](src/config.ts) にあります。
 
 ## 開発
 
 ```bash
 pnpm install
-pnpm check
+pnpm check   # 型チェック・テスト・ビルド
 ```
 
-設計は [docs/design.md](docs/design.md) にあります。
+設計メモは [docs/design.md](docs/design.md) にあります。
+
+## ライセンス
+
+[MIT](LICENSE)
