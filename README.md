@@ -50,7 +50,7 @@ acceptance: ログイン画面でエラーが表示される
 
 | キー | 既定 | 説明 |
 | --- | --- | --- |
-| `decisionProvider` | `liquid` | `liquid`（d1）/ `openrouter`（liquid/d1）/ `typesafe`（Jev）/ `custom` / `none` |
+| `decisionProvider` | `openrouter` | `openrouter`（liquid/d1、モデル名は decisionModel で変更可。例: liquid/d1-ultra, typesafe/jev-1.14.0）/ `liquid`（api.liquid.ai の d1）/ `typesafe`（Jev）/ `custom` / `none` |
 | `decisionModel` | `''` | モデル ID。空なら各プロバイダの既定（`custom` では必須） |
 | `decisionApiUrl` | `''` | エンドポイント。`custom` では必須（System One 互換の POST） |
 | `decisionApiKeyRef` | `''` | 空ならプロバイダごとに `LIQUID_API_KEY` / `OPENROUTER_API_KEY` / `TYPESAFE_API_KEY` / `DECISION_API_KEY` |

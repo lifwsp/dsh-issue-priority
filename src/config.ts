@@ -29,7 +29,7 @@ export interface PluginConfig {
  */
 export const Config = Schema.object({
   decisionProvider: Schema.union(['liquid' as const, 'openrouter' as const, 'typesafe' as const, 'custom' as const, 'none' as const])
-    .default('liquid')
+    .default('openrouter')
     .description(
       'Decision model (System One API). `liquid` = api.liquid.ai d1 (LIQUID_API_KEY), ' +
         '`openrouter` = liquid/d1 (OPENROUTER_API_KEY), `typesafe` = Jev (TYPESAFE_API_KEY), ' +
@@ -38,7 +38,7 @@ export const Config = Schema.object({
     .volatile(),
   decisionApiKeyRef: Schema.string()
     .default('')
-    .description('Credential / env name for the decision API key. Empty = LIQUID_API_KEY or OPENROUTER_API_KEY by provider.')
+    .description('Credential / env name for the decision API key. Empty = OPENROUTER_API_KEY / LIQUID_API_KEY / TYPESAFE_API_KEY / DECISION_API_KEY by provider.')
     .volatile(),
   decisionModel: Schema.string().default('').description('Model id override. Empty = provider default (d1 / liquid/d1 / jev-1.14.0). Required for custom.').volatile(),
   decisionApiUrl: Schema.string().default('').description('Endpoint override. Required for custom (POST, System One request shape).').volatile(),
@@ -67,7 +67,7 @@ export const Config = Schema.object({
 export type ResolvedConfig = Required<PluginConfig>
 
 export const DEFAULTS: ResolvedConfig = {
-  decisionProvider: 'liquid',
+  decisionProvider: 'openrouter',
   decisionApiKeyRef: '',
   decisionModel: '',
   decisionApiUrl: '',
