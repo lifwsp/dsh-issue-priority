@@ -75,6 +75,10 @@ window.__ModuleLoader__.load({
 			"." + PREFIX + "-rowbody{padding:2px 0 4px 18px;}",
 			"." + PREFIX + "-toggle{font:inherit;border:none;background:none;color:inherit;cursor:pointer;padding:0 2px;opacity:.6;}",
 			"." + PREFIX + "-why>div{margin-top:2px;}",
+			"." + PREFIX + "-icon{font:inherit;font-size:11px;font-weight:700;width:18px;height:18px;line-height:16px;padding:0;border-radius:50%;text-align:center;cursor:help;border:1px solid var(--dsw-alias-border-default,rgba(127,127,127,.35));background:transparent;color:inherit;opacity:.55;flex:none;}",
+			"." + PREFIX + "-icon.alert{opacity:1;border-color:transparent;background:var(--dsw-alias-state-warn-primary,#d97706);color:#fff;}",
+			"." + PREFIX + "-icon.small{width:15px;height:15px;line-height:13px;font-size:10px;}",
+			"." + PREFIX + "-pop{margin:6px 10px 0;padding:6px 8px;border-radius:6px;font-size:11px;line-height:1.5;white-space:pre-wrap;background:var(--dsw-alias-bg-layer-3,rgba(127,127,127,.12));}",
 		].join("\n");
 
 		var rpc = null;
@@ -127,20 +131,45 @@ window.__ModuleLoader__.load({
 			return out;
 		}
 
-		/** What the user can do to give the planner something to go on. */
-		function hints(view) {
-			var out = [];
+		/**
+		 * Everything about HOW the plan was made, kept out of sight: the header
+		 * shows only an icon ("!" when there is something to act on) and these
+		 * lines live in its tooltip.
+		 */
+		function statusInfo(view) {
+			var alerts = [];
+			var details = [];
+			if (!view || !view.plan) return { alerts: alerts, details: details };
 			var plan = view.plan;
-			if (view.decisionOff) out.push("判定モデルが止まっています（" + view.decisionOff + "）。規模・重要度・まとめ方を判定できないため、Issue 番号順で並べています。");
-			else if (plan.decision.note && /error/i.test(plan.decision.note)) out.push("判定モデルでエラーが出ています: " + plan.decision.note);
 			var s = view.signals;
-			if (s && s.open > 0 && view.decisionOff && s.withPriority === 0) {
-				out.push("重要度を示すラベル（priority:high など）が付いた Issue がありません。");
-			}
-			if (s && s.open > 0 && s.withBlock === 0) {
-				out.push(s.open + " 件すべてに dsh-plan ブロックがありません。issue-authoring スキルで書くと、規模と関係ファイルが計画に入ります。");
-			}
-			return out;
+			if (view.lastSyncError) alerts.push("同期エラー: " + view.lastSyncError);
+			if (view.decisionOff) alerts.push("判定モデルが止まっています（" + view.decisionOff + "）。規模・重要度・まとめ方を判定できないため、Issue 番号順で並べています。");
+			else if (plan.decision.note && /error/i.test(plan.decision.note)) alerts.push("判定モデルでエラーが出ています: " + plan.decision.note);
+			if (s && s.open > 0 && view.decisionOff && s.withPriority === 0) alerts.push("重要度を示すラベル（priority:high など）が付いた Issue がありません。");
+			plan.warnings.slice(0, 10).forEach(function (w) { alerts.push("#" + w.issue + " " + w.detail); });
+			details.push("最終同期 " + fmtTime(view.lastSyncAt));
+			details.push("判定モデル " + (plan.decision.available ? (plan.decision.model || plan.decision.provider) + "（" + plan.decision.provider + " 経由）" : "なし"));
+			details.push("判定モデルへの質問 累計 " + view.usage.questions + " 問");
+			if (s && s.open > 0) details.push("dsh-plan ブロック付き " + s.withBlock + " / " + s.open + " 件");
+			if (plan.decision.note && !/error/i.test(plan.decision.note)) details.push(plan.decision.note);
+			return { alerts: alerts, details: details };
+		}
+
+		/**
+		 * Small round icon whose details live in the hover tooltip; clicking it
+		 * toggles the same text inline (for touch / copying). "!" when something
+		 * deserves attention, "i" otherwise.
+		 */
+		function InfoIcon(props) {
+			var lines = props.lines.filter(Boolean);
+			if (!lines.length) return null;
+			return h("button", {
+				type: "button",
+				className: PREFIX + "-icon" + (props.alert ? " alert" : "") + (props.small ? " small" : ""),
+				title: lines.join("\n"),
+				"aria-label": lines.join(" "),
+				onClick: props.onToggle,
+			}, props.alert ? "!" : "i");
 		}
 
 		function openUrl(event, url) {
@@ -196,17 +225,19 @@ window.__ModuleLoader__.load({
 		function NextCard(props) {
 			var p = props.pkg;
 			var why = reasons(p, props.view);
+			var op = react.useState(false), open = op[0], setOpen = op[1];
 			return h("div", { className: PREFIX + "-next" },
 				h("div", { className: PREFIX + "-label" }, p.status === "in_progress" ? "作業中" : "次はこれ"),
 				h("div", { className: PREFIX + "-pkghead" },
 					h("span", { className: PREFIX + "-pkgid" }, p.id),
 					Badges(p),
+					h(InfoIcon, { small: true, lines: ["選んだ理由:"].concat(why.length ? why.map(function (w) { return "・" + w; }) : ["・ほかに決め手がないので、Issue 番号のいちばん小さいもの"]), onToggle: function () { setOpen(!open); } }),
 					h("span", { className: PREFIX + "-spacer" }),
 					h(StartButton, { pkg: p, view: props.view, busy: props.busy, act: props.act, primary: true })),
 				p.issues.map(function (n) { return h(IssueRow, { key: n, n: n, view: props.view, busy: props.busy, act: props.act }); }),
-				h("div", { className: PREFIX + "-why" },
+				open ? h("div", { className: PREFIX + "-why" },
 					why.length ? why.map(function (w, i) { return h("div", { key: i }, "・" + w); })
-						: "選んだ理由: ほかに決め手がないので、Issue 番号のいちばん小さいものです。"));
+						: "ほかに決め手がないので、Issue 番号のいちばん小さいものです。") : null);
 		}
 
 		/** Other packages: one compact row each, expandable. */
@@ -265,6 +296,9 @@ window.__ModuleLoader__.load({
 			}, [visible, scope.sessionId, scope.cwd]);
 
 			var plan = view && view.plan;
+			var si = react.useState(false), showInfo = si[0], setShowInfo = si[1];
+			var status = statusInfo(view);
+			var infoLines = status.alerts.length ? status.alerts.concat([""], status.details) : status.details;
 			var children = [];
 			if (error) children.push(h("div", { key: "err", className: PREFIX + "-err" }, error));
 			if (notice) children.push(h("div", { key: "ok", className: PREFIX + "-ok" }, notice));
@@ -277,10 +311,8 @@ window.__ModuleLoader__.load({
 						" ",
 						h("button", { className: PREFIX + "-btn " + PREFIX + "-mini", disabled: busy, onClick: function () { run("done"); } }, "作業中を解除")));
 				}
-				var tips = hints(view);
-				if (tips.length) {
-					children.push(h("div", { key: "hints", className: PREFIX + "-hint" },
-						tips.map(function (x, i) { return h("div", { key: i }, x); })));
+				if (showInfo && infoLines.length) {
+					children.push(h("div", { key: "info", className: PREFIX + "-pop" }, infoLines.join("\n")));
 				}
 				var next = null;
 				for (var i = 0; i < plan.workPackages.length; i++) if (plan.workPackages[i].id === view.nextId) next = plan.workPackages[i];
@@ -301,26 +333,13 @@ window.__ModuleLoader__.load({
 							h("div", { className: PREFIX + "-why" }, reason + (x.detail ? "（" + x.detail + "）" : ""))));
 					});
 				}
-				if (plan.warnings.length) {
-					children.push(h("div", { key: "wh", className: PREFIX + "-section" }, "警告"));
-					plan.warnings.slice(0, 10).forEach(function (w, i) {
-						children.push(h("div", { key: "w" + i, className: PREFIX + "-why" }, "#" + w.issue + " " + w.detail));
-					});
-				}
 			}
-
-			var meta = view
-				? "最終同期 " + fmtTime(view.lastSyncAt) +
-					" · 判定モデル " + (plan.decision.available ? (plan.decision.model || plan.decision.provider) : "なし") +
-					" · 累計 " + view.usage.questions + " 問" +
-					(view.lastSyncError ? " · 同期エラー: " + view.lastSyncError : "")
-				: "";
 
 			return h("div", { className: PREFIX },
 				h("div", { className: PREFIX + "-head" },
 					h("span", { className: PREFIX + "-repo", title: view ? view.repo : "" }, view ? view.repo : "Issue 計画"),
+					h(InfoIcon, { alert: status.alerts.length > 0, lines: infoLines, onToggle: function () { setShowInfo(!showInfo); } }),
 					h("button", { className: PREFIX + "-btn", disabled: busy, title: "GitHub と今すぐ同期", onClick: function () { run("sync"); } }, busy ? "…" : "同期")),
-				meta ? h("div", { className: PREFIX + "-meta", title: plan ? [plan.decision.available ? "経由: " + plan.decision.provider : "", plan.decision.note || ""].filter(Boolean).join("\n") : "" }, meta) : null,
 				h("div", { className: PREFIX + "-body" }, children));
 		}
 

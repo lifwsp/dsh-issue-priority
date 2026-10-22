@@ -111,11 +111,13 @@ describe('client bundle', () => {
     loaded.mod.apply(fakeCtx({ current: { registerTab: register } }).ctx)
     const planTab = (register.mock.calls[0] as any)[0].component
     const texts: string[] = []
+    const titles: string[] = []
     const render = (el: any): void => {
       if (el == null || el === false) return
       if (typeof el === 'string' || typeof el === 'number') return void texts.push(String(el))
       if (Array.isArray(el)) return el.forEach(render)
       if (typeof el.type === 'function') return render(el.type(el.props))
+      if (el.props?.title) titles.push(String(el.props.title))
       for (const c of el.children ?? []) render(c)
     }
     expect(() => render(planTab({ scope: { sessionId: 's1' }, visible: true }))).not.toThrow()
@@ -125,9 +127,17 @@ describe('client bundle', () => {
     expect(all).toContain('#2')
     expect(all).toContain('人の判断が必要')
     expect(all).toContain('作業中を解除')
-    expect(all).toContain('判定モデルが止まっています')
-    expect(all).toContain('dsh-plan ブロックがありません')
     expect(all).toContain('そのあと')
+    // How the plan was made stays behind a "!" icon: visible text has no hints,
+    // the tooltip carries them.
+    expect(all).toContain('!')
+    expect(all).not.toContain('判定モデルが止まっています')
+    expect(all).not.toContain('最終同期')
+    const tips = titles.join('\n')
+    expect(tips).toContain('判定モデルが止まっています')
+    expect(tips).toContain('#4 bad')
+    expect(tips).toContain('dsh-plan ブロック付き 0 / 2 件')
+    expect(tips).toContain('選んだ理由')
   })
 
   it('does not throw when every service is missing', () => {
