@@ -1,8 +1,8 @@
 import { SIZE_WEIGHT, PRIORITY_RANK, } from '../types.js';
-import { fileOverlap } from './files.js';
+import { catchAllAreas, fileOverlap, hubFiles } from './files.js';
 import { fieldEffort, fieldPriority, labelPriority, textSimilarity } from './signals.js';
 /** Bump when planning logic changes so stored plans are rebuilt. */
-export const PLANNER_VERSION = 5;
+export const PLANNER_VERSION = 6;
 const STILL_BLOCKED_THRESHOLD = 0.5;
 const DEFAULT_SIZE = 'M';
 async function mapPool(items, concurrency, fn) {
@@ -314,10 +314,16 @@ export async function buildPlan(options) {
             return;
         advisory.push(d.choice === 'a-first' ? { before: a.number, after: b.number, p: d.p } : { before: b.number, after: a.number, p: d.p });
     });
-    // Strength: exact file overlap 3, same directory 2, shared area 1. Sharing a
-    // goal adds to it — sub-issues of the same parent (+1.5) are reviewed and
-    // tested as one outcome; the same milestone (+0.5) ships together. Issues
-    // aimed at different milestones are never bundled (one PR, one release).
+    // Strength from the blocks: a shared area with a shared file 3, with a shared
+    // directory 2, alone 1. Files are evidence of one review / one test run only
+    // within the same feature: when both issues name areas and none is shared,
+    // overlap counts only through files that are not hubs (a file most issues
+    // touch, like an entry point, says nothing about purpose) and stays below
+    // the no-model bar (2), so only the decision model can bundle them. A
+    // catch-all area (most issues carry it) is ignored the same way.
+    // Sharing a goal adds to it — sub-issues of the same parent (+1.5) are
+    // reviewed and tested as one outcome; the same milestone (+0.5) ships
+    // together. Issues aimed at different milestones are never bundled.
     const candidates = [];
     const milestoneOf = (i) => i.native?.milestone?.title;
     const parentOf = (i) => i.native?.parent;
@@ -326,6 +332,8 @@ export async function buildPlan(options) {
         const y = milestoneOf(b);
         return x !== undefined && y !== undefined && x !== y;
     };
+    const hubs = hubFiles(eligible);
+    const hubAreas = catchAllAreas(eligible);
     for (let i = 0; i < eligible.length; i += 1) {
         const a = eligible[i];
         for (let j = i + 1; j < eligible.length; j += 1) {
@@ -336,13 +344,26 @@ export async function buildPlan(options) {
             let strength = 0;
             if (a.block && b.block) {
                 const ov = fileOverlap(a.block.files, b.block.files);
-                const sharedAreas = a.block.areas.filter((x) => b.block.areas.includes(x));
-                if (ov.exact.length || ov.near.length) {
-                    rationale.push({ kind: 'files-overlap', issues: [a.number, b.number], files: [...ov.exact, ...ov.near] });
-                }
+                // A catch-all area most issues carry (often from coarse, older blocks)
+                // says as little as a hub file.
+                const sharedAreas = a.block.areas.filter((x) => b.block.areas.includes(x) && !hubAreas.has(x));
+                const ownA = a.block.areas.filter((x) => !hubAreas.has(x));
+                const ownB = b.block.areas.filter((x) => !hubAreas.has(x));
+                const disjoint = !sharedAreas.length && ownA.length > 0 && ownB.length > 0;
+                const telling = ov.exact.filter((f) => !hubs.has(f));
                 if (sharedAreas.length)
-                    rationale.push({ kind: 'area-match', issues: [a.number, b.number], areas: sharedAreas });
-                strength = ov.exact.length ? 3 : ov.near.length ? 2 : sharedAreas.length ? 1 : 0;
+                    strength = ov.exact.length ? 3 : ov.near.length ? 2 : 1;
+                else if (disjoint)
+                    strength = telling.length ? 2 : 0;
+                else
+                    strength = telling.length ? 3 : ov.exact.length || ov.near.length ? 2 : 0;
+                if (strength) {
+                    const files = disjoint ? telling : [...ov.exact, ...ov.near];
+                    if (files.length)
+                        rationale.push({ kind: 'files-overlap', issues: [a.number, b.number], files });
+                    if (sharedAreas.length)
+                        rationale.push({ kind: 'area-match', issues: [a.number, b.number], areas: sharedAreas });
+                }
             }
             const parent = parentOf(a);
             const siblings = parent !== undefined && parent === parentOf(b);
@@ -393,9 +414,9 @@ export async function buildPlan(options) {
     const accepted = [];
     await mapPool(candidates, 4, async (c) => {
         if (!judge.available) {
-            // No decision model: an exact file overlap is strong enough on its own;
-            // sub-issues of one parent also need nearby files (or a shared area and
-            // the same milestone).
+            // No decision model: a shared area plus a shared file (or a telling,
+            // non-hub file) is strong enough; sub-issues of one parent also need a
+            // shared area or nearby files.
             if (c.strength >= 3)
                 accepted.push(c);
             return;
@@ -677,7 +698,7 @@ export async function buildPlan(options) {
             : judge.model;
     const notes = [];
     if (!judge.available)
-        notes.push('decision model not configured: sizes default to M, priority from labels only, bundling uses exact file overlap only');
+        notes.push('decision model not configured: sizes default to M, priority from labels only, bundling needs a shared area and a shared file (hub files and catch-all areas do not count)');
     if (skippedForBudget)
         notes.push(`${skippedForBudget} judgment(s) skipped: maxQuestionsPerSync reached`);
     if (judge.lastError)

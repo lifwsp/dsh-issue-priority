@@ -1,6 +1,6 @@
 import { GitHubAdapterError, } from './adapter.js';
 const DEFAULT_API_BASE = 'https://api.github.com';
-const USER_AGENT = 'dsh-work-planner/0.7.0';
+const USER_AGENT = 'dsh-work-planner/0.7.1';
 const RETRYABLE = new Set([403, 429]);
 /** GitHub-native planning metadata from one list item (pure; no request). */
 export function nativeMeta(raw) {

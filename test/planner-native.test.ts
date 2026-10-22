@@ -106,3 +106,54 @@ describe('buildPlan with GitHub-native signals', () => {
     expect(pkgOf(due, 2)?.rationale.find((r) => r.kind === 'due')).toMatchObject({ days: 3 })
   })
 })
+
+describe('bundling by purpose, not by hub files', () => {
+  const hub = ['src/server.ts', 'src/app.ts']
+  const issue = (n: number, areas: string[], files: string[] = hub) => rec(n, { block: block({ areas, files }) })
+
+  it('does not bundle different features that only share hub files', async () => {
+    const plan = await buildPlan(
+      base({
+        issues: [
+          issue(1, ['export']),
+          issue(2, ['status']),
+          issue(3, ['export']),
+          issue(4, ['status']),
+          issue(5, ['intake']),
+        ],
+      }),
+    )
+    expect(pkgOf(plan, 1)?.issues).toEqual([1, 3])
+    expect(pkgOf(plan, 2)?.issues).toEqual([2, 4])
+    expect(pkgOf(plan, 5)?.issues).toEqual([5])
+  })
+
+  it('still bundles different areas through a specific shared file', async () => {
+    const plan = await buildPlan(
+      base({ issues: [issue(1, ['a'], ['src/x.ts', 'src/y.ts']), issue(2, ['b'], ['src/x.ts', 'src/z.ts'])] }),
+    )
+    // Without a decision model a cross-area overlap stays a candidate only.
+    expect(pkgOf(plan, 1)?.issues).toEqual([1])
+  })
+
+  it('ignores a catch-all area left by older, coarse blocks', async () => {
+    const plan = await buildPlan(
+      base({
+        issues: [
+          issue(1, ['forms'], ['src/a.ts']),
+          issue(2, ['forms'], ['src/b.ts']),
+          issue(3, ['forms'], ['src/c.ts']),
+          issue(4, ['forms', 'export'], ['src/d.ts']),
+          issue(5, ['forms', 'export'], ['src/d.ts']),
+        ],
+      }),
+    )
+    expect(pkgOf(plan, 1)?.issues).toEqual([1])
+    expect(pkgOf(plan, 4)?.issues).toEqual([4, 5])
+  })
+
+  it('keeps bundling issues without areas on any shared file', async () => {
+    const plan = await buildPlan(base({ issues: [issue(1, [], ['src/a.ts']), issue(2, [], ['src/a.ts'])] }))
+    expect(pkgOf(plan, 1)?.issues).toEqual([1, 2])
+  })
+})

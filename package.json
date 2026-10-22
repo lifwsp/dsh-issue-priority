@@ -1,6 +1,6 @@
 {
   "name": "dsh-work-planner",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Work planner for DeepSeek Harness: groups GitHub issues into session-sized work packages, orders them by dependencies, importance and urgency, and hands the next package to the coding agent. Reads GitHub issue fields, sub-issues and dependencies; plans stay local.",
   "keywords": [
     "dsh-plugin",

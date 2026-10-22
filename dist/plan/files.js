@@ -61,4 +61,38 @@ export function fileOverlap(filesA, filesB) {
     }
     return { exact: [...exact].sort(), near: [...near].sort() };
 }
+/**
+ * Files named by so many issues that sharing them says little about purpose
+ * (entry points, registries): listed by at least 3 issues and at least a
+ * quarter of the issues that name files.
+ */
+export function hubFiles(issues) {
+    const count = new Map();
+    let naming = 0;
+    for (const i of issues) {
+        const files = new Set((i.block?.files ?? []).filter((f) => !isGlob(f)).map(normalize));
+        if (files.size)
+            naming += 1;
+        for (const f of files)
+            count.set(f, (count.get(f) ?? 0) + 1);
+    }
+    const min = Math.max(3, Math.ceil(naming / 4));
+    return new Set([...count].filter(([, n]) => n >= min).map(([f]) => f));
+}
+/**
+ * Areas carried by at least 3 issues and more than half of the issues with a
+ * block: a catch-all label that does not separate features.
+ */
+export function catchAllAreas(issues) {
+    const count = new Map();
+    let withBlock = 0;
+    for (const i of issues) {
+        if (!i.block)
+            continue;
+        withBlock += 1;
+        for (const a of new Set(i.block.areas))
+            count.set(a, (count.get(a) ?? 0) + 1);
+    }
+    return new Set([...count].filter(([, n]) => n >= 3 && n * 2 > withBlock).map(([a]) => a));
+}
 //# sourceMappingURL=files.js.map

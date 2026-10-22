@@ -6,7 +6,7 @@
 import type { Judge } from '../decision/judge.js';
 import { type AwaitingClose, type CloseEvidence, type IssueRecord, type LocalDependency, type Override, type Plan } from '../types.js';
 /** Bump when planning logic changes so stored plans are rebuilt. */
-export declare const PLANNER_VERSION = 5;
+export declare const PLANNER_VERSION = 6;
 export interface PlannerOptions {
     repo: string;
     issues: readonly IssueRecord[];
