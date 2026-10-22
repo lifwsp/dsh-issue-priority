@@ -5,7 +5,7 @@ import Schema from '@deepseek-ai/schemastery';
  */
 export const Config = Schema.object({
     decisionProvider: Schema.union(['liquid', 'openrouter', 'typesafe', 'custom', 'none'])
-        .default('openrouter')
+        .default('none')
         .description('Decision model (System One API). `liquid` = api.liquid.ai d1 (LIQUID_API_KEY), ' +
         '`openrouter` = liquid/d1 (OPENROUTER_API_KEY), `typesafe` = Jev (TYPESAFE_API_KEY), ' +
         '`custom` = decisionApiUrl + decisionModel (DECISION_API_KEY), `none` = deterministic only.')
@@ -37,7 +37,7 @@ export const Config = Schema.object({
     decisionTimeoutMs: Schema.natural().min(1000).max(120_000).default(15_000).description('Per-request decision API timeout.').volatile(),
 });
 export const DEFAULTS = {
-    decisionProvider: 'openrouter',
+    decisionProvider: 'none',
     decisionApiKeyRef: '',
     decisionModel: '',
     decisionApiUrl: '',

@@ -16,20 +16,27 @@ dsh plugin --profile web add github:lifwsp/dsh-issue-priority
 
 ## 設定
 
-Decision Model を使うには、次の 2 つが必要です。
+既定では Decision Model を使いません。この状態でも動きますが、規模や重要度は見積もらず、依存関係と Issue 番号の順に並びます。
 
-1. OpenRouter の API キーを `OPENROUTER_API_KEY` という名前で登録する（DSH の認証情報か環境変数）。
-2. プラグインの設定で `allowExternalJudgment` を `true` にする。
+Decision Model を使うときは、呼び先と API キーを設定し、`allowExternalJudgment` を `true` にします。`true` にすると、Issue のタイトルと本文が呼び先に送られます。
 
 ```yaml
 # cordis.patch.yml
 - id: dsh-issue-priority
   name: dsh-issue-priority
   config:
+    decisionProvider: liquid        # 下の表から選ぶ
     allowExternalJudgment: true
 ```
 
-`allowExternalJudgment` を `true` にすると、Issue のタイトルと本文が OpenRouter に送られます。`false`（既定）のままでも動きますが、規模や重要度は見積もらず、Issue 番号の順に並びます。
+| `decisionProvider` | 呼び先 | API キーの名前 |
+| --- | --- | --- |
+| `liquid` | Liquid AI の API（d1） | `LIQUID_API_KEY` |
+| `openrouter` | OpenRouter（`liquid/d1`） | `OPENROUTER_API_KEY` |
+| `typesafe` | TypeSafe の API（Jev） | `TYPESAFE_API_KEY` |
+| `custom` | System One 形式の任意の API。`decisionApiUrl` と `decisionModel` も指定する | `DECISION_API_KEY` |
+
+API キーは DSH の認証情報か環境変数に、表の名前で登録します。名前を変えたいときは `decisionApiKeyRef` で指定します。
 
 ## 使い方
 
@@ -75,8 +82,8 @@ dependsOn: 12
 
 | キー | 既定値 | 内容 |
 | --- | --- | --- |
-| `allowExternalJudgment` | `false` | Decision Model に Issue を送ってよいか |
-| `decisionProvider` | `openrouter` | `openrouter` / `liquid` / `typesafe` / `custom` / `none` |
+| `allowExternalJudgment` | `false` | Decision Model に Issue を送ってよいか。`decisionProvider` と両方そろったときだけ使う |
+| `decisionProvider` | `none` | Decision Model の呼び先（上の表）。`none` は使わない |
 | `decisionModel` | （呼び先ごとの既定） | 使うモデルの ID |
 | `syncIntervalMinutes` | `60` | 同期の間隔（分）。`0` で止める |
 | `maxIssues` | `300` | 1 回の同期で読む Issue の上限 |

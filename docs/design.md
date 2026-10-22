@@ -187,7 +187,7 @@ worktree はオプション（既定オフ）。
 | --- | --- |
 | `src/plan-block.ts` | dsh-plan ブロックの検証・描画・解析（書式の唯一の定義） |
 | `src/github/rest-adapter.ts` | REST で差分取得（`since`）、コメント、Issue dependencies（`/dependencies/blocked_by`） |
-| `src/decision/client.ts` | System One クライアント（liquid / openrouter、d1） |
+| `src/decision/client.ts` | System One クライアント（liquid / openrouter / typesafe / custom） |
 | `src/decision/judge.ts` | 3 種の質問（size+actionable / merge / direction）。入力ハッシュでキャッシュ |
 | `src/plan/planner.ts` | 依存グラフ・循環検出・まとめ・トポロジカル順 |
 | `src/store.ts` | `$DSH_HOME/data/dsh-issue-priority/owner__repo.json` |
@@ -197,7 +197,7 @@ worktree はオプション（既定オフ）。
 
 ## 10. 決定済みになった事項
 
-- **判定モデル**: 既定は LiquidAI d1。System One 形式（state + questions → answers）の API なら差し替え可能（`decisionProvider`: liquid / openrouter / typesafe / custom）。判定キャッシュはプロバイダ/モデル名を含むので、切り替えると再判定される。d1（入力 \$0.02 / 1M トークン、出力無料）。jevcore-dsh は `jev-*` モデルしか通さないため、プラグイン内に専用クライアントを持つ。
+- **判定モデル**: 既定は `none`（使わない）。公開プラグインなので特定の呼び先を既定にしない。System One 形式（state + questions → answers）の API なら差し替え可能（`decisionProvider`: liquid / openrouter / typesafe / custom）。判定キャッシュはプロバイダ/モデル名を含むので、切り替えると再判定される。d1（入力 \$0.02 / 1M トークン、出力無料）。jevcore-dsh は `jev-*` モデルしか通さないため、プラグイン内に専用クライアントを持つ。
 - **依存 API**: REST。理由は §11。
 - **コマンド→エージェント**: `invocation.agent.followup(ユーザーメッセージ)` で着手指示を次ターンとして渡せる（dsh-command-goal と同じ手段）。
 

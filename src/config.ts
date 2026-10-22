@@ -30,7 +30,7 @@ export interface PluginConfig {
  */
 export const Config = Schema.object({
   decisionProvider: Schema.union(['liquid' as const, 'openrouter' as const, 'typesafe' as const, 'custom' as const, 'none' as const])
-    .default('openrouter')
+    .default('none')
     .description(
       'Decision model (System One API). `liquid` = api.liquid.ai d1 (LIQUID_API_KEY), ' +
         '`openrouter` = liquid/d1 (OPENROUTER_API_KEY), `typesafe` = Jev (TYPESAFE_API_KEY), ' +
@@ -69,7 +69,7 @@ export const Config = Schema.object({
 export type ResolvedConfig = Required<PluginConfig>
 
 export const DEFAULTS: ResolvedConfig = {
-  decisionProvider: 'openrouter',
+  decisionProvider: 'none',
   decisionApiKeyRef: '',
   decisionModel: '',
   decisionApiUrl: '',

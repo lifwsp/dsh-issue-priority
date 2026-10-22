@@ -78,7 +78,7 @@ function defaultKeyRef(config: ResolvedConfig): string {
 
 /** Returns a client, or a reason string why the model is off. */
 async function decisionClient(ctx: AnyCtx, config: ResolvedConfig): Promise<DecisionClient | string> {
-  if (config.decisionProvider === 'none') return 'decisionProvider=none'
+  if (config.decisionProvider === 'none') return 'decisionProvider が未設定（none）'
   if (!config.allowExternalJudgment) return 'allowExternalJudgment=false（Issue 内容を外部に送らない設定）'
   const ref = defaultKeyRef(config)
   const apiKey = await resolveSecret(ctx, ref)
