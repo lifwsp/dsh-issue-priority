@@ -2,8 +2,7 @@
  * Slash commands (design §7). Commands never reach the model except `/issues next`,
  * which hands a kickoff message to the agent as a follow-up turn.
  */
-import { randomUUID } from 'node:crypto'
-import { nextPackage, renderKickoff, renderPackage, renderPlan } from './render.js'
+import { nextPackage, renderKickoff, renderPackage, renderPlan, userMessage } from './render.js'
 import type { IssuePlanRuntime } from './runtime.js'
 
 type CommandResult = { kind: 'success'; text?: string } | { kind: 'error'; text: string }
@@ -23,16 +22,6 @@ const HELP = [
   '/issues done       作業中の印を外す',
   '/issues sync       GitHub と今すぐ同期（full で全件取り直し）',
 ].join('\n')
-
-/** Build a frozen user message shaped like dsh-llm createUserMessage (no hard dependency). */
-function userMessage(text: string): unknown {
-  return Object.freeze({
-    role: 'user',
-    id: randomUUID(),
-    content: [{ type: 'text', text }],
-    source: { kind: 'user' },
-  })
-}
 
 function parseIssue(arg: string | undefined): number | null {
   const n = Number(arg?.replace(/^#/, ''))

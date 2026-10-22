@@ -152,6 +152,14 @@ acceptance: トークン期限切れ時に自動更新される
 
 worktree はオプション（既定オフ）。
 
+### 7.2a サイドバータブ（better-sidebar、任意）
+
+- client 半: `client/client.js`（手書き、ビルドなし。`react` だけをローダーから受け取る）。`ctx.betterSidebar.registerTab({ id: 'dsh-issue-priority:plan', single: true })`。サイドバーのサービスは後から来ることがあるので、1 秒間隔で 30 回まで登録をやり直す。apply は例外を外に出さない。
+- host 半: `src/rpc.ts`。`connection.rpc.handle('/dsh-issue-priority', …, { authority: 'loopback' })`。endpoint は `plan` / `sync` / `override` / `done` / `next`。
+- リポジトリの判定: `agents.list()` からタブの `scope.sessionId` に一致するエージェントを探し、その作業ディレクトリを使う。見つからなければ、タブが知らせる `scope.cwd` を使う。
+- 着手（`next`）: 一致したエージェントの `followup()` に、`/issues next` と同じ指示を渡す。エージェントが見つからないときは、エラーを返してコマンドの使用を案内する。
+- 表示中は 60 秒ごとに `plan` を呼ぶ（`ensurePlan` なので、5 分以内は保存済みの計画を返す）。
+
 ### 7.3 エージェント向けツール
 
 - `issue_plan_read`：計画を読む（「Issue 対応しよう」と言われたとき用）
@@ -173,6 +181,7 @@ worktree はオプション（既定オフ）。
 | `src/store.ts` | `$DSH_HOME/data/dsh-issue-priority/owner__repo.json` |
 | `src/sync.ts` | 差分同期と再計画（変更なしなら判定 0 件） |
 | `src/runtime.ts` / `src/tools.ts` / `src/commands.ts` / `src/skill.ts` | ツール・`/issues` コマンド・スキル |
+| `src/rpc.ts` / `client/client.js` | サイドバータブ（host の RPC 窓口と、ブラウザー側の画面） |
 
 ## 10. 決定済みになった事項
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-issue-priority",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Background GitHub Issue planning for DeepSeek Harness: bundles issues into session-sized work packages and orders them, using deterministic rules plus the LiquidAI d1 decision model (no LLM in the background).",
   "keywords": [
     "dsh-plugin",
@@ -9,7 +9,8 @@
     "issues",
     "planning",
     "liquid-d1",
-    "decision-model"
+    "decision-model",
+    "better-sidebar"
   ],
   "license": "MIT",
   "type": "module",
@@ -21,10 +22,17 @@
     "manifestVersion": 1,
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "dsh-better-sidebar"
+      ]
     }
   },
   "files": [
     "dist",
+    "client",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -33,6 +41,9 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./client": {
+      "default": "./client/client.js"
     },
     "./package.json": "./package.json"
   },

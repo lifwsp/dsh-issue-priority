@@ -34,7 +34,11 @@ export class IssuePlanRuntime {
       this.knownRepos.add(repo)
       return repo
     }
-    const cwd = this.deps.cwdOf(agent) ?? process.cwd()
+    return this.resolveRepoAt(this.deps.cwdOf(agent) ?? process.cwd())
+  }
+
+  /** Resolve the GitHub repo of a directory (e.g. the cwd the sidebar reports). */
+  async resolveRepoAt(cwd: string): Promise<string> {
     const repo = await detectRepo(cwd)
     if (!repo) {
       throw new Error(

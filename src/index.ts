@@ -6,6 +6,7 @@ import { Config, resolveLiveConfig, type ResolvedConfig } from './config.js'
 import { HttpDecisionClient, type DecisionClient } from './decision/client.js'
 import { RestGitHubAdapter } from './github/rest-adapter.js'
 import { createLogger, type Logger } from './log.js'
+import { createRpcHandler, RPC_CHANNEL } from './rpc.js'
 import { IssuePlanRuntime } from './runtime.js'
 import { ISSUE_AUTHORING_SKILL, ISSUE_WORK_SKILL } from './skill.js'
 import { createFileStore, defaultDataDir } from './store.js'
@@ -20,7 +21,7 @@ export const name = 'dsh-issue-priority'
  * lazily with ctx.get() so their absence degrades (env / process.cwd()) instead
  * of leaving the plugin pending.
  */
-export const inject = ['tools', 'commands', 'skills']
+export const inject = ['tools', 'commands', 'skills', 'timer']
 
 export { Config }
 export type { PluginConfig } from './config.js'
@@ -96,6 +97,52 @@ async function decisionClient(ctx: AnyCtx, config: ResolvedConfig): Promise<Deci
 }
 
 /**
+ * Mount the loopback RPC channel the better-sidebar tab talks to. Optional:
+ * without the `connection` service the tab just shows "host unavailable".
+ * Retries for a while because a reload can still hold the channel.
+ */
+function mountRpc(ctx: AnyCtx, runtime: IssuePlanRuntime, logger: Logger): void {
+  const dispatch = createRpcHandler({
+    runtime,
+    agents: () => {
+      const agents = ctx.get?.('agents') as { list?: () => unknown[] } | undefined
+      return (agents?.list?.() ?? []) as never
+    },
+  })
+  const handler = (endpoint: string, payload: unknown, signal?: AbortSignal) => dispatch(endpoint, payload, signal)
+  const mountOnce = (): (() => unknown) | undefined => {
+    const connection = ctx.get?.('connection') as { rpc?: { handle?: (channel: string, h: typeof handler, opts?: unknown) => unknown } } | undefined
+    const handle = connection?.rpc?.handle
+    if (typeof handle !== 'function') return undefined
+    try {
+      const release = handle.call(connection!.rpc, RPC_CHANNEL, handler, { authority: 'loopback' })
+      return typeof release === 'function' ? (release as () => unknown) : undefined
+    } catch (error) {
+      logger.debug('rpc mount failed', { error: error instanceof Error ? error.message : String(error) })
+      return undefined
+    }
+  }
+  let release = mountOnce()
+  let retry: (() => void) | undefined
+  if (!release && typeof ctx.interval === 'function') {
+    let attempts = 0
+    retry = ctx.interval(() => {
+      attempts += 1
+      release = mountOnce()
+      if (release || attempts >= 30) {
+        if (!release) logger.warn('sidebar RPC channel could not be mounted; the sidebar tab will be unavailable')
+        retry?.()
+        retry = undefined
+      }
+    }, 1000) as () => void
+  }
+  ctx.effect?.(() => () => {
+    retry?.()
+    void release?.()
+  })
+}
+
+/**
  * Cordis plugin entry. All registrations are effect-scoped so unloading the
  * plugin removes tools, the command, skills and the timer.
  */
@@ -160,6 +207,8 @@ export const apply = (ctx: AnyCtx, rawConfig: Record<string, unknown> = {}) => {
   for (const skill of [ISSUE_AUTHORING_SKILL, ISSUE_WORK_SKILL]) {
     ctx.effect(() => ctx.skills.register({ ...skill, source: 'runtime' }))
   }
+
+  mountRpc(ctx, runtime, logger)
 
   // Background sync: plugin-internal timer, no LLM. Repos become known when a
   // tool/command first resolves them in this process.

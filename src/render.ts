@@ -1,4 +1,5 @@
 /** Plain-text rendering of plans for commands and tool output (Japanese UI). */
+import { randomUUID } from 'node:crypto'
 import type { RepoState } from './store.js'
 import type { IssueRecord, Plan, Rationale, WorkPackage } from './types.js'
 
@@ -110,4 +111,14 @@ export function renderKickoff(plan: Plan, pkg: WorkPackage, issues: Record<strin
     `4. PR を作るときは本文に「${closes}」を入れる。`,
     '5. 依存の見落としや分割の誤りに気づいたら issue_plan_update で記録する。',
   ].join('\n')
+}
+
+/** Build a frozen user message shaped like dsh-llm createUserMessage (no hard dependency). */
+export function userMessage(text: string): unknown {
+  return Object.freeze({
+    role: 'user',
+    id: randomUUID(),
+    content: Object.freeze([Object.freeze({ type: 'text', text })]),
+    source: Object.freeze({ kind: 'user' }),
+  })
 }
