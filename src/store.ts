@@ -5,7 +5,8 @@
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import type { IssueRecord, LocalDependency, Override, Plan, UsageTotals } from './types.js'
+import type { Dismissal, FinishedMark } from './progress.js'
+import type { IssueRecord, LocalDependency, LocalScan, Override, Plan, StoredPull, UsageTotals } from './types.js'
 
 export const STORE_SCHEMA = 1
 
@@ -20,6 +21,15 @@ export interface RepoState {
   overrides: Override[]
   localDependencies: LocalDependency[]
   inProgress: { issues: number[]; branch?: string; startedAt: string } | null
+  /** Issues marked finished (finish / done) that are still open: awaiting close. */
+  finished: FinishedMark[]
+  /** Detected "awaiting close" evidence the user said is not done yet. */
+  dismissed: Dismissal[]
+  /** PRs (open, or merged recently) that point at issues. */
+  pulls: StoredPull[]
+  pullsSyncedAt: string | null
+  /** Last scan of the local clone's branches (path is reused by the background timer). */
+  local: LocalScan | null
   /** Area vocabulary seen in blocks + registered by issue_draft. */
   areas: string[]
   /** Decision-model answer cache, keyed by input hash. */
@@ -48,6 +58,11 @@ export function emptyState(repo: string, now = new Date()): RepoState {
     overrides: [],
     localDependencies: [],
     inProgress: null,
+    finished: [],
+    dismissed: [],
+    pulls: [],
+    pullsSyncedAt: null,
+    local: null,
     areas: [],
     judgments: {},
     plan: null,

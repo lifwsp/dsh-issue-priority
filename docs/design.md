@@ -116,6 +116,19 @@ acceptance: トークン期限切れ時に自動更新される
 
 v0.3 までは 2〜4 がなく、依存のない Issue は番号順に並ぶだけだった。依存関係の少ないリポジトリでは全部が同じに見え、「次に何をすればいいか」がわからなかった（2026-10-22、実リポジトリで確認）。計画ロジックを変えたときは `PLANNER_VERSION` を上げ、保存済みの計画を次の同期で作り直す。
 
+### 5.5 クローズ待ち（実装済み・未クローズ）
+
+`src/progress.ts` が、開いている Issue のうち「作業はどこかに存在するが、まだ閉じていない」ものを決定的に判定する。d1 は使わない。
+
+- 根拠（`CloseEvidence`）は 3 種類。`marked`（finish / done の印）、`branch`（ローカルブランチ）、`pr`（PR）。
+- ローカルブランチは `git` の読み取りコマンドだけで調べる（fetch しない）。GitHub のリポジトリを指すリモートの既定ブランチ（`<remote>/HEAD`、なければ main / master / trunk / develop）との差分コミットを持ち、直近 30 日にコミットのあるブランチ、最大 40 本。対象 Issue はブランチ名（`wp-12-13` / `issue-12` / `12-xxx`）、コミットの closing keyword、記録されたブランチ名で決める。コミットで `#N` に触れているだけのものは表示用（`mentionOnly`）。push 状態は upstream（なければ `<remote>/<branch>`）との差分で `none` / `partial` / `all` / `gone`。
+- PR は同期のたびに REST で取得する（open 全件 + 直近 30 日に更新された closed、最大 200 件、未マージの closed は捨てる）。closing keyword（`close[sd]` / `fix(e[sd])` / `resolve[sd]`、他リポジトリ参照は除く）、ブランチ名、記録されたブランチ名で Issue と結ぶ。取得に失敗したら前回の一覧を使う。
+- 判定：印があればクローズ待ち。作業中の Issue は、マージ済み PR か、closing keyword 付きのドラフトでない PR があるときだけクローズ待ち（その場合は作業中からも外す）。それ以外は PR か対象ブランチがあればクローズ待ち。
+- `reopen` は印を消し、その時点の根拠のキー（`b:<branch>` / `pr:<n>:<state>`）を `dismissed` に覚える。新しいキーが出るまで計画に残す。
+- 次の一手（`CloseStep`）：マージ済み PR だけ → `close-issue`、open PR → `merge-pr`（未 push があれば `push`）、ブランチだけ → `push` か `open-pr`、根拠が印だけ → `check`。
+- 計画では、クローズ待ちの Issue をパッケージから外す。それに依存するパッケージは `waiting` にし、`waitingOnClose` に番号を入れる（closed 扱いにして着手可にはしない）。
+- `start` を既定ブランチの上で呼んだときはブランチ名を記録せず、あとでセッションの cwd がほかのブランチに移ったときに記録する。
+
 ## 6. 計画データ（ローカル保存）
 
 保存先：プラグインのデータディレクトリ配下、リポジトリごとに 1 ファイル。
@@ -167,7 +180,7 @@ worktree はオプション（既定オフ）。
 ### 7.2a サイドバータブ（better-sidebar、任意）
 
 - client 半: `client/client.js`（手書き、ビルドなし。`react` だけをローダーから受け取る）。`ctx.betterSidebar.registerTab({ id: 'dsh-issue-priority:plan', single: true })`。サイドバーのサービスは後から来ることがあるので、1 秒間隔で 30 回まで登録をやり直す。apply は例外を外に出さない。
-- host 半: `src/rpc.ts`。`ctx.inject(['webServer'], …)` の中で、`connection.rpc.handle('/dsh-issue-priority', …)` があればそれを使い、なければ `webServer.register` に prefix ルートを直接張る（DSH デスクトップには host 側の `connection` サービスがない。dsh-run-button も同じく直接ルートで動いている）。直接ルートはブラウザーの `connection.rpc.call` と同じ封筒（`client-request` → `server-response`）を話す。`connection` を inject 条件に入れると、デスクトップでは中身が一度も実行されず、ブラウザーには SPA フォールバックの HTTP 405 が返る。endpoint は `plan` / `sync` / `override` / `done` / `next`。
+- host 半: `src/rpc.ts`。`ctx.inject(['webServer'], …)` の中で、`connection.rpc.handle('/dsh-issue-priority', …)` があればそれを使い、なければ `webServer.register` に prefix ルートを直接張る（DSH デスクトップには host 側の `connection` サービスがない。dsh-run-button も同じく直接ルートで動いている）。直接ルートはブラウザーの `connection.rpc.call` と同じ封筒（`client-request` → `server-response`）を話す。`connection` を inject 条件に入れると、デスクトップでは中身が一度も実行されず、ブラウザーには SPA フォールバックの HTTP 405 が返る。endpoint は `plan` / `sync` / `override` / `done`（実装完了 → クローズ待ち）/ `stop` / `reopen` / `next`。
 - リポジトリの判定: `agents.list()` からタブの `scope.sessionId` に一致するエージェントを探し、その作業ディレクトリを使う。見つからなければ、タブが知らせる `scope.cwd` を使う。
 - 着手（`next`）: 一致したエージェントの `followup()` に、`/issues next` と同じ指示を渡す。エージェントが見つからないときは、エラーを返してコマンドの使用を案内する。
 - 表示中は 60 秒ごとに `plan` を呼ぶ（`ensurePlan` なので、5 分以内は保存済みの計画を返す）。
@@ -175,7 +188,7 @@ worktree はオプション（既定オフ）。
 ### 7.3 エージェント向けツール
 
 - `issue_plan_read`：計画を読む（「Issue 対応しよう」と言われたとき用）
-- `issue_plan_update`：着手・完了の記録、作業中に見つけた依存の追記（スキーマ検証・循環検出あり）
+- `issue_plan_update`：着手（start）・実装完了（finish → クローズ待ち）・中断（stop）・計画へ戻す（reopen）の記録、作業中に見つけた依存の追記（スキーマ検証・循環検出あり）
 
 ## 8. プライバシー
 

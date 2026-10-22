@@ -9,7 +9,9 @@ const HELP = [
     '/issues defer N    #N を後回し',
     '/issues pin N      #N を優先',
     '/issues clear N    defer/pin を解除',
-    '/issues done       作業中の印を外す',
+    '/issues done [N…]  実装完了（クローズ待ち）にする。省略時は作業中のもの全部',
+    '/issues stop       完了にせず作業中の印だけ外す',
+    '/issues reopen N   クローズ待ちの #N を計画に戻す（まだ終わっていない）',
     '/issues sync       GitHub と今すぐ同期（full で全件取り直し）',
 ].join('\n');
 function parseIssue(arg) {
@@ -25,18 +27,18 @@ export async function runIssuesCommand(runtime, inv) {
             case '':
             case 'show':
             case 'list': {
-                const { state, plan } = await runtime.ensurePlan(repo, { signal });
+                const { state, plan } = await runtime.ensurePlan(repo, { signal, cwd: runtime.cwdFor(inv.agent) });
                 return { kind: 'success', text: renderPlan(state, plan) };
             }
             case 'sync': {
-                const res = await runtime.deps.sync.sync(repo, { full: rest[0] === 'full', signal });
+                const res = await runtime.deps.sync.sync(repo, { full: rest[0] === 'full', signal, cwd: runtime.cwdFor(inv.agent) });
                 const head = res.unchanged
                     ? `同期しました（変更なし、判定 0 件）。`
                     : `同期しました: 取得 ${res.fetched} / 変更 ${res.changed.length} / クローズ ${res.closed.length}。`;
                 return { kind: 'success', text: `${head}\n\n${renderPlan(res.state, res.plan)}` };
             }
             case 'next': {
-                const { state, plan } = await runtime.ensurePlan(repo, { signal });
+                const { state, plan } = await runtime.ensurePlan(repo, { signal, cwd: runtime.cwdFor(inv.agent) });
                 const pkg = rest[0] ? plan.workPackages.find((p) => p.id === rest[0]) : nextPackage(plan);
                 if (!pkg) {
                     return { kind: 'error', text: rest[0] ? `パッケージ ${rest[0]} が見つかりません。` : '着手可能なパッケージがありません。/issues で状況を確認してください。' };
@@ -58,8 +60,31 @@ export async function runIssuesCommand(runtime, inv) {
             }
             case 'done':
             case 'finish': {
+                const nums = rest.map(parseIssue);
+                if (nums.some((n) => n === null))
+                    return { kind: 'error', text: '使い方: /issues done [Issue番号…]' };
+                const branch = await runtime.branchFor(inv.agent);
+                let finished = [];
+                const { state, plan } = await runtime.mutate(repo, (s) => {
+                    finished = runtime.finish(s, nums, branch);
+                }, signal, runtime.cwdFor(inv.agent));
+                if (!finished.length)
+                    return { kind: 'error', text: '作業中の Issue がありません。/issues done <Issue番号> で指定してください。' };
+                return {
+                    kind: 'success',
+                    text: `${finished.map((n) => `#${n}`).join(' ')} をクローズ待ちにしました（GitHub で閉じられるまで推奨から外します）。\n\n${renderPlan(state, plan, { limit: 5 })}`,
+                };
+            }
+            case 'stop': {
                 const { state, plan } = await runtime.mutate(repo, (s) => runtime.setInProgress(s, null), signal);
                 return { kind: 'success', text: `作業中の印を外しました。\n\n${renderPlan(state, plan, { limit: 5 })}` };
+            }
+            case 'reopen': {
+                const n = parseIssue(rest[0]);
+                if (!n)
+                    return { kind: 'error', text: '使い方: /issues reopen <Issue番号>' };
+                const { state, plan } = await runtime.mutate(repo, (s) => runtime.reopen(s, n), signal, runtime.cwdFor(inv.agent));
+                return { kind: 'success', text: `#${n} を計画に戻しました。\n\n${renderPlan(state, plan, { limit: 5 })}` };
             }
             case 'help':
                 return { kind: 'success', text: HELP };
@@ -75,7 +100,7 @@ export function createIssuesCommand(runtime) {
     return {
         name: 'issues',
         description: 'Issue の作業パッケージ計画を表示・操作する（next / defer / pin / sync）',
-        input: { hint: '[next|defer N|pin N|clear N|done|sync [full]|help]' },
+        input: { hint: '[next|defer N|pin N|clear N|done [N]|stop|reopen N|sync [full]|help]' },
         handler: (inv) => runIssuesCommand(runtime, inv),
     };
 }

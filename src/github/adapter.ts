@@ -34,10 +34,34 @@ export interface ListIssuesSinceOptions {
   signal?: AbortSignal
 }
 
+/** Pull request as listed by GitHub (open, or closed recently). */
+export interface FetchedPull {
+  number: number
+  title: string
+  body: string
+  htmlUrl: string
+  state: 'open' | 'closed'
+  draft: boolean
+  mergedAt: string | null
+  head: string
+  base: string
+  updatedAt: string
+}
+
+export interface ListPullsOptions {
+  repo: string
+  /** Also return PRs closed after this ISO timestamp (merged ones matter). */
+  closedSince: string
+  maxPulls: number
+  signal?: AbortSignal
+}
+
 /** Read-only GitHub access seam (REST implementation; tests use fakes). */
 export interface GitHubIssueSource {
   readonly id: string
   listIssuesSince(options: ListIssuesSinceOptions): Promise<FetchedIssue[]>
+  /** Optional: sources without it simply detect nothing from PRs. */
+  listPulls?(options: ListPullsOptions): Promise<FetchedPull[]>
 }
 
 export class GitHubAdapterError extends Error {

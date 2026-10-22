@@ -96,6 +96,7 @@ describe('client bundle', () => {
       usage: { questions: 3, inputTokens: 100 },
       decisionOff: 'OPENROUTER_API_KEY が未設定',
       signals: { open: 2, withBlock: 0, withPriority: 0 },
+      awaiting: [{ issue: 5, marked: false, step: 'push 待ち', next: 'ブランチを push する', evidence: ['ブランチ issues/wp-5: コミット 2 件・未 push 2 件'], urls: [] }],
       plan: {
         workPackages: [
           { id: 'P1', issues: [1], dependsOn: [], blockedByExternal: [], rationale: [{ kind: 'files-overlap', issues: [1, 2], files: ['a'] }], size: 1, sizeSource: {}, status: 'in_progress' },
@@ -126,7 +127,10 @@ describe('client bundle', () => {
     expect(all).toContain('続ける')
     expect(all).toContain('#2')
     expect(all).toContain('人の判断が必要')
-    expect(all).toContain('作業中を解除')
+    expect(all).toContain('実装完了')
+    expect(all).toContain('クローズ待ち（1）')
+    expect(all).toContain('push 待ち')
+    expect(all).toContain('戻す')
     expect(all).toContain('そのあと')
     // How the plan was made stays behind a "!" icon: visible text has no hints,
     // the tooltip carries them.

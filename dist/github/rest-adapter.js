@@ -1,4 +1,4 @@
-import { GitHubAdapterError } from './adapter.js';
+import { GitHubAdapterError, } from './adapter.js';
 const DEFAULT_API_BASE = 'https://api.github.com';
 const USER_AGENT = 'dsh-issue-priority/0.5.0';
 const RETRYABLE = new Set([403, 429]);
@@ -128,6 +128,50 @@ export class RestGitHubAdapter {
                 comments,
             };
         });
+    }
+    /**
+     * Open PRs plus PRs closed since `closedSince` (newest first). Merged PRs
+     * that still left an issue open are how "merged into a non-default branch"
+     * or "forgot Closes #N" show up.
+     */
+    async listPulls(options) {
+        const repo = resolveRepo(options.repo);
+        const [owner, name] = repo.split('/');
+        const cap = Math.max(1, options.maxPulls);
+        const out = [];
+        const take = (raw) => ({
+            number: raw.number,
+            title: raw.title ?? '',
+            body: raw.body ?? '',
+            htmlUrl: raw.html_url,
+            state: raw.state === 'closed' ? 'closed' : 'open',
+            draft: raw.draft === true,
+            mergedAt: raw.merged_at ?? null,
+            head: raw.head?.ref ?? '',
+            base: raw.base?.ref ?? '',
+            updatedAt: raw.updated_at,
+        });
+        for (const state of ['open', 'closed']) {
+            for (let page = 1; out.length < cap; page += 1) {
+                const batch = (await this.request('GET', `/repos/${owner}/${name}/pulls`, {
+                    query: { state, sort: 'updated', direction: 'desc', per_page: '100', page: String(page) },
+                    signal: options.signal,
+                })) ?? [];
+                let older = false;
+                for (const raw of batch) {
+                    if (state === 'closed' && raw.updated_at < options.closedSince) {
+                        older = true;
+                        break;
+                    }
+                    out.push(take(raw));
+                    if (out.length >= cap)
+                        break;
+                }
+                if (older || batch.length < 100)
+                    break;
+            }
+        }
+        return out;
     }
     async fetchCommentBodies(owner, name, issueNumber, signal) {
         const out = [];

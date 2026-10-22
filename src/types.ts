@@ -93,6 +93,65 @@ export interface WorkPackage {
   /** Number of other packages that (transitively) wait for this one. */
   unblocks: number
   status: PackageStatus
+  /** Prerequisites that are done but not yet closed (awaiting close): the package waits, not blocked. */
+  waitingOnClose?: number[]
+}
+
+/** Open pull request (or recently merged one) that points at issues. */
+export interface StoredPull {
+  number: number
+  state: 'open' | 'merged'
+  draft: boolean
+  htmlUrl: string
+  head: string
+  base: string
+  updatedAt: string
+  /** Issues named with a closing keyword (`Closes #N`) in the title / body. */
+  closes: number[]
+  /** Issues named only by the head branch (e.g. `issues/wp-12-13`). */
+  branchRefs: number[]
+}
+
+/** How much of a local branch exists on the remote. `gone` = upstream deleted. */
+export type PushState = 'none' | 'partial' | 'all' | 'gone'
+
+export interface LocalBranch {
+  branch: string
+  upstream: string | null
+  pushed: PushState
+  /** Commits not on the upstream (all commits when there is no upstream). */
+  unpushed: number
+  /** Commits not on the default branch of the remote. */
+  commits: number
+  /** Issue → commits that mention it (`#N` anywhere in the message). */
+  issues: Record<string, number>
+  /** Issues the branch is clearly for: named by the branch, or a closing keyword in a commit. */
+  targets: number[]
+}
+
+export interface LocalScan {
+  path: string
+  /** Remote default branch the branches are compared with (e.g. origin/main). */
+  base: string
+  scannedAt: string
+  branches: LocalBranch[]
+}
+
+/** Why an open issue looks finished but is not closed yet. */
+export type CloseEvidence =
+  | { kind: 'marked'; at: string; branch?: string }
+  | { kind: 'branch'; branch: string; commits: number; unpushed: number; pushed: PushState; upstream: string | null; mentionOnly?: boolean }
+  | { kind: 'pr'; number: number; state: 'open' | 'merged'; draft: boolean; url: string; base: string; linked: 'keyword' | 'branch' }
+
+/** What is left before the issue closes. */
+export type CloseStep = 'push' | 'open-pr' | 'merge-pr' | 'close-issue' | 'check'
+
+export interface AwaitingClose {
+  issue: number
+  /** marked = finished explicitly (finish / done); detected = found from git / PRs. */
+  source: 'marked' | 'detected'
+  step: CloseStep
+  evidence: CloseEvidence[]
 }
 
 export type NeedsHumanReason = 'dependency-cycle' | 'unclear'
@@ -137,6 +196,10 @@ export interface Plan {
   /** Ordered: first `ready` entry is the recommended next package. */
   workPackages: WorkPackage[]
   needsHuman: NeedsHuman[]
+  /** Done (or worked on elsewhere) but still open: kept out of the recommendations. */
+  awaitingClose?: AwaitingClose[]
+  /** Git / PR activity seen for issues that stay in the plan (e.g. the one in progress). */
+  activity?: Record<string, CloseEvidence[]>
   /** Non-fatal problems (e.g. an invalid dsh-plan block that was ignored). */
   warnings: PlanWarning[]
   changesSinceLast: ChangesSinceLast

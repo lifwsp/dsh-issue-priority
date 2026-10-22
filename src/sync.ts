@@ -8,14 +8,15 @@ import { promisify } from 'node:util'
 import { PLANNER_VERSION } from './plan/planner.js'
 import { createJudge, type Judge, type JudgmentStore } from './decision/judge.js'
 import type { DecisionClient } from './decision/client.js'
-import type { FetchedIssue, GitHubIssueSource } from './github/adapter.js'
+import type { FetchedIssue, FetchedPull, GitHubIssueSource } from './github/adapter.js'
 import { parseDependencies } from './github/dependencies.js'
 import { repoFromRemoteUrl, resolveRepo } from './github/rest-adapter.js'
 import type { Logger } from './log.js'
 import { parsePlanBlock, stripPlanBlock } from './plan-block.js'
 import { buildPlan } from './plan/planner.js'
+import { branchIssueRefs, detectProgress, usableBranch, parseClosingRefs, scanLocalRepo, type ProgressResult } from './progress.js'
 import type { RepoState, StateStore } from './store.js'
-import type { IssueRecord, Plan, ThreadPost } from './types.js'
+import type { IssueRecord, LocalScan, Plan, StoredPull, ThreadPost } from './types.js'
 
 const execFileAsync = promisify(execFile)
 const MENTION_RE = /(?:^|[^\w/&])#(\d+)\b/g
@@ -37,6 +38,17 @@ export interface SyncDeps {
   logger: Logger
   settings: () => SyncSettings
   now?: () => Date
+  /** Local clone scanner (tests inject a fake). Default: read-only git commands. */
+  scanLocal?: (cwd: string, repo: string, now: Date) => Promise<LocalScan | null>
+  /** Current branch of a clone (tests inject a fake). */
+  branchOf?: (cwd: string) => Promise<string | null>
+}
+
+export interface SyncOptions {
+  full?: boolean
+  signal?: AbortSignal
+  /** Directory of a local clone to scan for branches (else the last scanned one). */
+  cwd?: string
 }
 
 export interface SyncResult {
@@ -47,6 +59,33 @@ export interface SyncResult {
   closed: number[]
   /** True when nothing changed on GitHub and no replan was required. */
   unchanged: boolean
+}
+
+/** Merged PRs older than this no longer count as evidence. */
+const PULL_LOOKBACK_DAYS = 30
+const MAX_PULLS = 200
+
+/** Keep only PRs that point at issues; closed-unmerged PRs are dropped. */
+export function toStoredPulls(raw: readonly FetchedPull[], repo: string, knownBranches: ReadonlySet<string> = new Set()): StoredPull[] {
+  const out: StoredPull[] = []
+  for (const p of raw) {
+    if (p.state === 'closed' && !p.mergedAt) continue
+    const closes = parseClosingRefs(`${p.title}\n${p.body}`, repo)
+    const branchRefs = branchIssueRefs(p.head).filter((n) => n !== p.number && !closes.includes(n))
+    if (!closes.length && !branchRefs.length && !knownBranches.has(p.head)) continue
+    out.push({
+      number: p.number,
+      state: p.state === 'open' ? 'open' : 'merged',
+      draft: p.draft,
+      htmlUrl: p.htmlUrl,
+      head: p.head,
+      base: p.base,
+      updatedAt: p.updatedAt,
+      closes,
+      branchRefs,
+    })
+  }
+  return out.sort((a, b) => a.number - b.number)
 }
 
 const MAX_THREAD_POSTS = 20
@@ -154,7 +193,7 @@ export class SyncService {
   }
 
   /** Coalesce concurrent syncs of the same repo (timer + command). */
-  sync(repo: string, options: { full?: boolean; signal?: AbortSignal } = {}): Promise<SyncResult> {
+  sync(repo: string, options: SyncOptions = {}): Promise<SyncResult> {
     const key = resolveRepo(repo).toLowerCase()
     const existing = this.running.get(key)
     if (existing) return existing
@@ -163,9 +202,45 @@ export class SyncService {
     return p
   }
 
+  /** Re-scan the local clone (read-only git). Keeps the old scan when the scan fails. */
+  async refreshLocal(state: RepoState, cwd?: string): Promise<void> {
+    const path = cwd ?? state.local?.path
+    if (!path) return
+    const scan = this.deps.scanLocal ?? scanLocalRepo
+    try {
+      const res = await scan(path, state.repo, this.now())
+      if (res) state.local = res
+      else if (!cwd || cwd === state.local?.path) state.local = null
+      // `start` called before the branch was created: remember the branch the work moved to.
+      if (res && cwd && state.inProgress && !usableBranch(state.inProgress.branch)) {
+        const branch = await (this.deps.branchOf ?? currentBranch)(cwd)
+        if (usableBranch(branch)) state.inProgress = { ...state.inProgress, branch }
+      }
+    } catch (error) {
+      this.deps.logger.debug('local scan failed', { repo: state.repo, error: String(error) })
+    }
+  }
+
+  progress(state: RepoState): ProgressResult {
+    return detectProgress({
+      open: Object.values(state.issues).filter((i) => i.state === 'open').map((i) => i.number),
+      inProgress: state.inProgress,
+      finished: state.finished ?? [],
+      dismissed: state.dismissed ?? [],
+      pulls: state.pulls ?? [],
+      local: state.local ?? null,
+    })
+  }
+
   /** Rebuild the plan from the local snapshot without touching GitHub. */
-  async replan(state: RepoState, signal?: AbortSignal, closedSinceLast: number[] = []): Promise<Plan> {
+  async replan(state: RepoState, signal?: AbortSignal, closedSinceLast: number[] = [], progress = this.progress(state)): Promise<Plan> {
     const settings = this.deps.settings()
+    // Work that reached a finished-looking PR is no longer "in progress".
+    if (state.inProgress && progress.awaitingClose.length) {
+      const done = new Set(progress.awaitingClose.map((a) => a.issue))
+      const left = state.inProgress.issues.filter((n) => !done.has(n))
+      if (left.length !== state.inProgress.issues.length) state.inProgress = left.length ? { ...state.inProgress, issues: left } : null
+    }
     const judge: Judge = createJudge(await this.deps.decision(), judgmentStore(state, this.now))
     const plan = await buildPlan({
       repo: state.repo,
@@ -173,6 +248,8 @@ export class SyncService {
       overrides: state.overrides,
       localDependencies: state.localDependencies,
       inProgress: state.inProgress?.issues ?? [],
+      awaitingClose: progress.awaitingClose,
+      activity: progress.activity,
       areas: state.areas,
       judge,
       previous: state.plan,
@@ -193,7 +270,7 @@ export class SyncService {
     return plan
   }
 
-  private async run(repo: string, options: { full?: boolean; signal?: AbortSignal }): Promise<SyncResult> {
+  private async run(repo: string, options: SyncOptions): Promise<SyncResult> {
     const { store, logger } = this.deps
     const settings = this.deps.settings()
     const state = await store.load(repo)
@@ -249,11 +326,17 @@ export class SyncService {
       const gone = new Set(closed)
       state.overrides = state.overrides.filter((o) => !gone.has(o.issue))
       state.localDependencies = state.localDependencies.filter((d) => !gone.has(d.issue))
+      state.finished = (state.finished ?? []).filter((f) => !gone.has(f.issue))
+      state.dismissed = (state.dismissed ?? []).filter((d) => !gone.has(d.issue))
       if (state.inProgress) {
         const left = state.inProgress.issues.filter((n) => !gone.has(n))
         state.inProgress = left.length ? { ...state.inProgress, issues: left } : null
       }
     }
+
+    // Local first: it may record the branch `start` missed, which the PR filter uses.
+    await this.refreshLocal(state, options.cwd)
+    await this.refreshPulls(state, options.signal)
 
     state.syncedUntil = watermark
     state.lastSyncAt = this.now().toISOString()
@@ -261,16 +344,40 @@ export class SyncService {
     collectAreas(state)
 
     const stalePlan = state.plan !== null && state.plan.plannerVersion !== PLANNER_VERSION
-    const unchanged = !changed.length && !closed.length && state.plan !== null && !options.full && !stalePlan
-    const plan = unchanged ? state.plan! : await this.replan(state, options.signal, closed)
+    const progress = this.progress(state)
+    const sameProgress =
+      JSON.stringify(progress.awaitingClose) === JSON.stringify(state.plan?.awaitingClose ?? []) &&
+      JSON.stringify(progress.activity) === JSON.stringify(state.plan?.activity ?? {})
+    const unchanged = !changed.length && !closed.length && state.plan !== null && !options.full && !stalePlan && sameProgress
+    const plan = unchanged ? state.plan! : await this.replan(state, options.signal, closed, progress)
     await store.save(state)
     logger.info('sync complete', {
       repo,
       fetched: fetched.length,
       changed: changed.length,
       closed: closed.length,
+      awaitingClose: progress.awaitingClose.length,
       asked: unchanged ? 0 : plan.decision.asked,
     })
     return { state, plan, fetched: fetched.length, changed, closed: closed.sort((a, b) => a - b), unchanged }
+  }
+
+  /** PRs are a best-effort signal: a failure keeps the previous list. */
+  private async refreshPulls(state: RepoState, signal?: AbortSignal): Promise<void> {
+    try {
+      const gh = await this.deps.github()
+      if (typeof gh.listPulls !== 'function') return
+      const closedSince = new Date(this.now().getTime() - PULL_LOOKBACK_DAYS * 86400_000).toISOString()
+      const raw = await gh.listPulls({ repo: state.repo, closedSince, maxPulls: MAX_PULLS, signal })
+      // PRs from branches we recorded (start / finish) count even without `Closes #N`.
+      const known = new Set<string>()
+      if (state.inProgress?.branch) known.add(state.inProgress.branch)
+      for (const f of state.finished ?? []) if (f.branch) known.add(f.branch)
+      state.pulls = toStoredPulls(raw, state.repo, known)
+      state.pullsSyncedAt = this.now().toISOString()
+    } catch (error) {
+      if (signal?.aborted) throw error
+      this.deps.logger.warn('pull request fetch failed; keeping the previous list', { repo: state.repo, error: String(error) })
+    }
   }
 }

@@ -128,6 +128,7 @@ window.__ModuleLoader__.load({
 			}
 			if (p.dependsOn.length) out.push("先に " + p.dependsOn.join(", ") + " が必要");
 			if (p.blockedByExternal.length) out.push("計画外の " + p.blockedByExternal.map(function (n) { return "#" + n; }).join(" ") + " 待ち");
+			if (p.waitingOnClose && p.waitingOnClose.length) out.push(p.waitingOnClose.map(function (n) { return "#" + n; }).join(" ") + " のクローズ待ち（実装済み）");
 			return out;
 		}
 
@@ -309,7 +310,9 @@ window.__ModuleLoader__.load({
 					children.push(h("div", { key: "wip", className: PREFIX + "-ok" },
 						"作業中: " + view.inProgress.issues.map(function (n) { return "#" + n; }).join(" ") + (view.inProgress.branch ? "（" + view.inProgress.branch + "）" : ""),
 						" ",
-						h("button", { className: PREFIX + "-btn " + PREFIX + "-mini", disabled: busy, onClick: function () { run("done"); } }, "作業中を解除")));
+						h("button", { className: PREFIX + "-btn " + PREFIX + "-mini", disabled: busy, title: "実装が終わった（push・PR 前でもよい）。クローズ待ちにして推奨から外す", onClick: function () { run("done"); } }, "実装完了"),
+						" ",
+						h("button", { className: PREFIX + "-btn " + PREFIX + "-mini", disabled: busy, title: "完了にせず作業中の印だけ外す", onClick: function () { run("stop"); } }, "中断")));
 				}
 				if (showInfo && infoLines.length) {
 					children.push(h("div", { key: "info", className: PREFIX + "-pop" }, infoLines.join("\n")));
@@ -323,6 +326,24 @@ window.__ModuleLoader__.load({
 				if (rest.length) {
 					children.push(h("div", { key: "resth", className: PREFIX + "-section" }, "そのあと（" + rest.length + "）"));
 					rest.forEach(function (p) { children.push(h(PackageRow, { key: p.id, pkg: p, view: view, busy: busy, act: run })); });
+				}
+				if (view.awaiting && view.awaiting.length) {
+					children.push(h("div", { key: "awh", className: PREFIX + "-section", title: "実装は終わったが GitHub では開いたままの Issue。クローズされると消える" }, "クローズ待ち（" + view.awaiting.length + "）"));
+					view.awaiting.forEach(function (a) {
+						children.push(h("div", { key: "aw" + a.issue, className: PREFIX + "-row" },
+							h("div", { className: PREFIX + "-issue" },
+								h("a", { href: (view.issues[String(a.issue)] || {}).htmlUrl || "#", onClick: function (e) { var i = view.issues[String(a.issue)]; openUrl(e, a.urls[0] || (i && i.htmlUrl)); } },
+									h("span", { className: PREFIX + "-num" }, "#" + a.issue),
+									(view.issues[String(a.issue)] || {}).title || ""),
+								h("span", { className: PREFIX + "-badge" }, a.step),
+								h("button", {
+									className: PREFIX + "-btn " + PREFIX + "-mini",
+									title: "まだ終わっていない。計画に戻す",
+									disabled: busy,
+									onClick: function () { run("reopen", { issue: a.issue }); },
+								}, "戻す")),
+							h("div", { className: PREFIX + "-why", title: a.evidence.join("\n") }, "→ " + a.next + (a.evidence.length ? "（" + a.evidence.join(" / ") + "）" : ""))));
+					});
 				}
 				if (plan.needsHuman.length) {
 					children.push(h("div", { key: "nh", className: PREFIX + "-section" }, "人の判断が必要（" + plan.needsHuman.length + "）"));

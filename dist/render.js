@@ -1,5 +1,6 @@
 /** Plain-text rendering of plans for commands and tool output (Japanese UI). */
 import { randomUUID } from 'node:crypto';
+import { describeEvidence, describeStep, STEP_LABEL } from './progress.js';
 const STATUS_LABEL = {
     ready: '着手可',
     waiting: '先行待ち',
@@ -49,6 +50,8 @@ export function renderPackage(pkg, issues, index) {
         lines.push(`   - ${issueLabel(issues, n)}`);
     if (pkg.dependsOn.length)
         lines.push(`   先に: ${pkg.dependsOn.join(', ')}`);
+    if (pkg.waitingOnClose?.length)
+        lines.push(`   クローズ待ち: ${pkg.waitingOnClose.map((n) => `#${n}`).join(', ')}（実装済み・未クローズ）`);
     if (pkg.blockedByExternal.length)
         lines.push(`   外部ブロッカー: ${pkg.blockedByExternal.map((n) => `#${n}`).join(', ')}`);
     for (const r of pkg.rationale.slice(0, 4))
@@ -76,6 +79,16 @@ export function renderPlan(state, plan, options = {}) {
     plan.workPackages.slice(0, limit).forEach((p, i) => lines.push(...renderPackage(p, state.issues, i)));
     if (plan.workPackages.length > limit)
         lines.push(`…ほか ${plan.workPackages.length - limit} パッケージ`);
+    const awaiting = plan.awaitingClose ?? [];
+    if (awaiting.length) {
+        lines.push('', '実装済み・クローズ待ち（推奨から除外）:');
+        for (const a of awaiting) {
+            lines.push(`   - ${issueLabel(state.issues, a.issue)} [${STEP_LABEL[a.step]}] → ${describeStep(a)}`);
+            for (const e of a.evidence.slice(0, 3))
+                lines.push(`       ${describeEvidence(e)}`);
+        }
+        lines.push('   （まだ終わっていなければ /issues reopen N で計画に戻す）');
+    }
     if (plan.needsHuman.length) {
         lines.push('', '人の判断が必要:');
         for (const h of plan.needsHuman) {
@@ -109,10 +122,11 @@ export function renderKickoff(plan, pkg, issues) {
         '',
         '進め方:',
         '1. まず issue_plan_read で計画と各 Issue の本文を確認し、作業方針を短く提示して私の承認を待つ。',
-        `2. 承認後、作業用ブランチを切る（例: issues/${pkg.id}）。`,
-        '3. Issue ごとに実装・テストし、こまめにコミットする。',
-        `4. PR を作るときは本文に「${closes}」を入れる。`,
-        '5. 依存の見落としや分割の誤りに気づいたら issue_plan_update で記録する。',
+        `2. 承認後、作業用ブランチを切り（例: issues/${pkg.id}）、そのブランチ上で issue_plan_update action=start issues=[${pkg.issues.join(', ')}] を呼ぶ。`,
+        '3. Issue ごとに実装・テストし、こまめにコミットする（コミットメッセージに #番号 を入れる）。',
+        `4. 実装が終わったら、push や PR の前でも issue_plan_update action=finish を呼ぶ（クローズ待ちになり、推奨から外れる）。`,
+        `5. PR を作るときは本文に「${closes}」を入れる。`,
+        '6. 依存の見落としや分割の誤りに気づいたら issue_plan_update で記録する。',
     ].join('\n');
 }
 /** Build a frozen user message shaped like dsh-llm createUserMessage (no hard dependency). */

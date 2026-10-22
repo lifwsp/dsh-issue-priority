@@ -46,6 +46,15 @@ export interface PlanView {
     canKickoff: boolean;
     /** Why the decision model is off (user-facing), when it is. */
     decisionOff: string | null;
+    /** Done but not closed, pre-rendered for the tab (texts live in progress.ts). */
+    awaiting: {
+        issue: number;
+        marked: boolean;
+        step: string;
+        next: string;
+        evidence: string[];
+        urls: string[];
+    }[];
     /** How much the planner had to go on (to explain a flat plan). */
     signals: {
         open: number;

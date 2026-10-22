@@ -4,9 +4,9 @@
  * direction); everything else is plain code so the result is reproducible.
  */
 import type { Judge } from '../decision/judge.js';
-import { type IssueRecord, type LocalDependency, type Override, type Plan } from '../types.js';
+import { type AwaitingClose, type CloseEvidence, type IssueRecord, type LocalDependency, type Override, type Plan } from '../types.js';
 /** Bump when planning logic changes so stored plans are rebuilt. */
-export declare const PLANNER_VERSION = 3;
+export declare const PLANNER_VERSION = 4;
 export interface PlannerOptions {
     repo: string;
     issues: readonly IssueRecord[];
@@ -14,6 +14,13 @@ export interface PlannerOptions {
     localDependencies: readonly LocalDependency[];
     /** Issues the user is currently working on (forced into one package). */
     inProgress: readonly number[];
+    /**
+     * Done but still open (see progress.ts): kept out of the packages; packages
+     * that depend on them wait instead of being blocked.
+     */
+    awaitingClose?: readonly AwaitingClose[];
+    /** Git / PR activity for issues that stay in the plan (passed through to the plan). */
+    activity?: Record<string, CloseEvidence[]>;
     /** Known area vocabulary (for unknown-area warnings). */
     areas: readonly string[];
     judge: Judge;

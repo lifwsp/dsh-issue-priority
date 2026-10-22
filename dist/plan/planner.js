@@ -2,7 +2,7 @@ import { SIZE_WEIGHT, PRIORITY_RANK, } from '../types.js';
 import { fileOverlap } from './files.js';
 import { labelPriority, textSimilarity } from './signals.js';
 /** Bump when planning logic changes so stored plans are rebuilt. */
-export const PLANNER_VERSION = 3;
+export const PLANNER_VERSION = 4;
 const STILL_BLOCKED_THRESHOLD = 0.5;
 const DEFAULT_SIZE = 'M';
 async function mapPool(items, concurrency, fn) {
@@ -119,7 +119,10 @@ export async function buildPlan(options) {
     const now = options.now ?? (() => new Date());
     const warnings = [];
     const needsHuman = [];
-    const open = options.issues.filter((i) => i.state === 'open').sort((a, b) => a.number - b.number);
+    const allOpen = options.issues.filter((i) => i.state === 'open').sort((a, b) => a.number - b.number);
+    const awaitingClose = (options.awaitingClose ?? []).filter((a) => allOpen.some((i) => i.number === a.issue));
+    const awaiting = new Set(awaitingClose.map((a) => a.issue));
+    const open = allOpen.filter((i) => !awaiting.has(i.number));
     const byNumber = new Map(open.map((i) => [i.number, i]));
     const knownAreas = new Set(options.areas);
     const pinned = new Set(options.overrides.filter((o) => o.action === 'pin').map((o) => o.issue));
@@ -209,6 +212,15 @@ export async function buildPlan(options) {
         edgeKey.delete(k);
     // Dependencies on issues that are not open (closed, other repo, unknown) are satisfied.
     const hard = edges.filter((e) => byNumber.has(e.to) && !dropped.has(`${e.from}->${e.to}`));
+    // Prerequisites that are done but not closed yet: the dependent waits for the close.
+    const onClose = new Map();
+    for (const e of edges) {
+        if (!awaiting.has(e.to) || dropped.has(`${e.from}->${e.to}`))
+            continue;
+        if (!onClose.has(e.from))
+            onClose.set(e.from, new Set());
+        onClose.get(e.from).add(e.to);
+    }
     // ── 3. cycles → needsHuman ──────────────────────────────────────────────
     const adj = new Map();
     for (const e of hard) {
@@ -439,6 +451,10 @@ export async function buildPlan(options) {
             ordered = topoSort([...set], hardOnly, issueKey);
         const rationale = [...groupRationale.get(g)];
         const blockedByExternal = new Set();
+        const waitingOnClose = new Set();
+        for (const n of ordered)
+            for (const d of onClose.get(n) ?? [])
+                waitingOnClose.add(d);
         for (const n of ordered) {
             for (const e of dependsOnMap.get(n) ?? []) {
                 rationale.push({ kind: 'hard-dependency', issue: n, dependsOn: e.to, source: e.source });
@@ -470,6 +486,7 @@ export async function buildPlan(options) {
             ...packagePriority(ordered, prio),
             unblocks: 0,
             status: 'ready',
+            ...(waitingOnClose.size ? { waitingOnClose: [...waitingOnClose].sort((a, b) => a - b) } : {}),
         };
         packages.push(pkg);
         pkgOfGroup.set(g, pkg);
@@ -544,7 +561,7 @@ export async function buildPlan(options) {
             p.status = 'in_progress';
         else if (p.blockedByExternal.length || p.dependsOn.some((d) => blockedIds.has(d)))
             p.status = 'blocked';
-        else if (p.dependsOn.length)
+        else if (p.dependsOn.length || p.waitingOnClose?.length)
             p.status = 'waiting';
         else
             p.status = 'ready';
@@ -560,8 +577,9 @@ export async function buildPlan(options) {
         p.issues.forEach((n) => prevIssues.add(n));
     });
     prev?.needsHuman.forEach((h) => prevIssues.add(h.issue));
+    prev?.awaitingClose?.forEach((a) => prevIssues.add(a.issue));
     const changesSinceLast = {
-        new: prev ? open.map((i) => i.number).filter((n) => !prevIssues.has(n)) : [],
+        new: prev ? allOpen.map((i) => i.number).filter((n) => !prevIssues.has(n)) : [],
         closed: [...(options.closedSinceLast ?? [])].sort((a, b) => a - b),
         reordered: prev
             ? orderedPkgs.filter((p, i) => prevIndex.has(p.id) && prevIndex.get(p.id) !== i).map((p) => p.id)
@@ -590,6 +608,8 @@ export async function buildPlan(options) {
         generatedAt: now().toISOString(),
         workPackages: orderedPkgs,
         needsHuman: needsHuman.sort((a, b) => a.issue - b.issue),
+        awaitingClose,
+        ...(options.activity && Object.keys(options.activity).length ? { activity: options.activity } : {}),
         warnings,
         changesSinceLast,
         decision: {

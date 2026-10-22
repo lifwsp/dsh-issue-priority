@@ -6,6 +6,7 @@
  * working directory) or the cwd the sidebar reports, then reuses the same
  * runtime the /issues command uses. No endpoint writes to GitHub.
  */
+import { describeEvidence, describeStep, STEP_LABEL } from './progress.js';
 import { nextPackage, renderKickoff, userMessage } from './render.js';
 export const RPC_CHANNEL = '/dsh-issue-priority';
 const ENDPOINT_SEGMENT = /^[A-Za-z0-9_$.-]+$/;
@@ -39,6 +40,11 @@ function view(state, plan, agent, decisionOff) {
     for (const p of plan.workPackages)
         for (const n of p.blockedByExternal)
             wanted.add(n);
+    for (const p of plan.workPackages)
+        for (const n of p.waitingOnClose ?? [])
+            wanted.add(n);
+    for (const a of plan.awaitingClose ?? [])
+        wanted.add(a.issue);
     for (const n of wanted) {
         const i = state.issues[String(n)];
         if (i)
@@ -59,6 +65,14 @@ function view(state, plan, agent, decisionOff) {
         usage: { questions: state.usage.questions, inputTokens: state.usage.inputTokens },
         canKickoff: typeof agent?.followup === 'function',
         decisionOff: decisionOff ?? null,
+        awaiting: (plan.awaitingClose ?? []).map((a) => ({
+            issue: a.issue,
+            marked: a.source === 'marked',
+            step: STEP_LABEL[a.step],
+            next: describeStep(a),
+            evidence: a.evidence.map(describeEvidence),
+            urls: a.evidence.flatMap((e) => (e.kind === 'pr' ? [e.url] : [])),
+        })),
         signals: signalCounts(state, plan),
     };
 }
@@ -87,40 +101,60 @@ export function createRpcHandler(deps) {
     };
     async function resolve(p) {
         const agent = findAgent(deps, str(p.sessionId));
-        const explicit = str(p.repo);
-        if (explicit)
-            return { repo: await runtime.resolveRepoFor(agent, explicit), agent };
         // Session cwd wins; fall back to the cwd the sidebar reported.
         const cwd = (agent ? runtime.deps.cwdOf(agent) : undefined) ?? str(p.cwd);
+        const explicit = str(p.repo);
+        if (explicit)
+            return { repo: await runtime.resolveRepoFor(agent, explicit), agent, cwd };
         if (!cwd)
             throw new RpcError('no-cwd', 'セッションの作業ディレクトリがわかりません。リポジトリのフォルダでセッションを開いてください。');
-        return { repo: await runtime.resolveRepoAt(cwd), agent };
+        return { repo: await runtime.resolveRepoAt(cwd), agent, cwd };
     }
+    const issueOf = (p) => {
+        const issue = Number(p.issue);
+        if (!Number.isInteger(issue) || issue <= 0)
+            throw new RpcError('bad-request', 'issue must be a positive integer');
+        return issue;
+    };
     const handlers = {
         async plan(p, signal) {
-            const { repo, agent } = await resolve(p);
-            const { state, plan } = await runtime.ensurePlan(repo, { signal });
+            const { repo, agent, cwd } = await resolve(p);
+            const { state, plan } = await runtime.ensurePlan(repo, { signal, cwd });
             return view(state, plan, agent, await off());
         },
         async sync(p, signal) {
-            const { repo, agent } = await resolve(p);
-            const res = await runtime.deps.sync.sync(repo, { full: p.full === true, signal });
+            const { repo, agent, cwd } = await resolve(p);
+            const res = await runtime.deps.sync.sync(repo, { full: p.full === true, signal, cwd });
             return { ...view(res.state, res.plan, agent, await off()), synced: { fetched: res.fetched, changed: res.changed.length, closed: res.closed.length, unchanged: res.unchanged } };
         },
         async override(p, signal) {
             const { repo, agent } = await resolve(p);
-            const issue = Number(p.issue);
+            const issue = issueOf(p);
             const action = p.action;
-            if (!Number.isInteger(issue) || issue <= 0)
-                throw new RpcError('bad-request', 'issue must be a positive integer');
             if (action !== 'defer' && action !== 'pin' && action !== 'clear')
                 throw new RpcError('bad-request', 'action must be defer | pin | clear');
             const { state, plan } = await runtime.mutate(repo, (s) => runtime.setOverride(s, issue, action), signal);
             return view(state, plan, agent, await off());
         },
+        /** Implementation done → awaiting close (`issues`, or everything in progress). */
         async done(p, signal) {
+            const { repo, agent, cwd } = await resolve(p);
+            const issues = Array.isArray(p.issues) ? p.issues.map(Number).filter((n) => Number.isInteger(n) && n > 0) : undefined;
+            const branch = cwd ? await runtime.branchAt(cwd) : null;
+            const { state, plan } = await runtime.mutate(repo, (s) => void runtime.finish(s, issues, branch), signal, cwd);
+            return view(state, plan, agent, await off());
+        },
+        /** Stop working without finishing. */
+        async stop(p, signal) {
             const { repo, agent } = await resolve(p);
             const { state, plan } = await runtime.mutate(repo, (s) => runtime.setInProgress(s, null), signal);
+            return view(state, plan, agent, await off());
+        },
+        /** Not done after all: back into the plan. */
+        async reopen(p, signal) {
+            const { repo, agent, cwd } = await resolve(p);
+            const issue = issueOf(p);
+            const { state, plan } = await runtime.mutate(repo, (s) => runtime.reopen(s, issue), signal, cwd);
             return view(state, plan, agent, await off());
         },
         async next(p, signal) {

@@ -1,4 +1,4 @@
-import { type FetchedIssue, type GitHubIssueSource, type ListIssuesSinceOptions } from './adapter.js';
+import { type FetchedIssue, type FetchedPull, type GitHubIssueSource, type ListIssuesSinceOptions, type ListPullsOptions } from './adapter.js';
 export interface RestGitHubAdapterOptions {
     token?: string;
     baseUrl?: string;
@@ -26,6 +26,12 @@ export declare class RestGitHubAdapter implements GitHubIssueSource {
      * only when the list payload says they exist.
      */
     listIssuesSince(options: ListIssuesSinceOptions): Promise<FetchedIssue[]>;
+    /**
+     * Open PRs plus PRs closed since `closedSince` (newest first). Merged PRs
+     * that still left an issue open are how "merged into a non-default branch"
+     * or "forgot Closes #N" show up.
+     */
+    listPulls(options: ListPullsOptions): Promise<FetchedPull[]>;
     private fetchCommentBodies;
     /** GitHub issue dependencies (REST, 2025+). Missing feature/permission → []. */
     private fetchBlockedBy;

@@ -1,4 +1,12 @@
-import { GitHubAdapterError, type FetchedIssue, type IssueComment, type GitHubIssueSource, type ListIssuesSinceOptions } from './adapter.js'
+import {
+  GitHubAdapterError,
+  type FetchedIssue,
+  type FetchedPull,
+  type IssueComment,
+  type GitHubIssueSource,
+  type ListIssuesSinceOptions,
+  type ListPullsOptions,
+} from './adapter.js'
 
 const DEFAULT_API_BASE = 'https://api.github.com'
 const USER_AGENT = 'dsh-issue-priority/0.5.0'
@@ -36,6 +44,19 @@ interface GhDependencyRaw {
   number?: number
   state?: string
   repository_url?: string
+}
+
+interface GhPullRaw {
+  number: number
+  title?: string
+  body?: string | null
+  html_url: string
+  state: string
+  draft?: boolean
+  merged_at?: string | null
+  updated_at: string
+  head?: { ref?: string }
+  base?: { ref?: string }
 }
 
 interface GhCommentRaw {
@@ -180,6 +201,50 @@ export class RestGitHubAdapter implements GitHubIssueSource {
         comments,
       } satisfies FetchedIssue
     })
+  }
+
+  /**
+   * Open PRs plus PRs closed since `closedSince` (newest first). Merged PRs
+   * that still left an issue open are how "merged into a non-default branch"
+   * or "forgot Closes #N" show up.
+   */
+  async listPulls(options: ListPullsOptions): Promise<FetchedPull[]> {
+    const repo = resolveRepo(options.repo)
+    const [owner, name] = repo.split('/') as [string, string]
+    const cap = Math.max(1, options.maxPulls)
+    const out: FetchedPull[] = []
+    const take = (raw: GhPullRaw): FetchedPull => ({
+      number: raw.number,
+      title: raw.title ?? '',
+      body: raw.body ?? '',
+      htmlUrl: raw.html_url,
+      state: raw.state === 'closed' ? 'closed' : 'open',
+      draft: raw.draft === true,
+      mergedAt: raw.merged_at ?? null,
+      head: raw.head?.ref ?? '',
+      base: raw.base?.ref ?? '',
+      updatedAt: raw.updated_at,
+    })
+    for (const state of ['open', 'closed'] as const) {
+      for (let page = 1; out.length < cap; page += 1) {
+        const batch =
+          (await this.request<GhPullRaw[]>('GET', `/repos/${owner}/${name}/pulls`, {
+            query: { state, sort: 'updated', direction: 'desc', per_page: '100', page: String(page) },
+            signal: options.signal,
+          })) ?? []
+        let older = false
+        for (const raw of batch) {
+          if (state === 'closed' && raw.updated_at < options.closedSince) {
+            older = true
+            break
+          }
+          out.push(take(raw))
+          if (out.length >= cap) break
+        }
+        if (older || batch.length < 100) break
+      }
+    }
+    return out
   }
 
   private async fetchCommentBodies(

@@ -150,11 +150,13 @@ export const ISSUE_WORK_SKILL = {
 1. **issue_plan_read** を呼ぶ（古ければ自動で同期される）。
 2. 次のおすすめパッケージ（作業中があればそれ）を、含まれる Issue・順番・まとめた理由つきで短く提示し、ユーザーの承認を待つ。
    別のパッケージを希望されたらそれに従う。「人の判断が必要」項目があれば一言添える。
-3. 承認されたら **issue_plan_update** action=start issues=[...] で作業中にし、作業ブランチを切る。
-4. Issue の順に実装・テスト・コミット。PR 本文に \`Closes #N\` を全 Issue 分書く。
+3. 承認されたら作業ブランチを切り（例: \`issues/wp-12-13\`）、**そのブランチ上で** **issue_plan_update** action=start issues=[...] を呼ぶ（ブランチ名が記録され、検知に使われる）。
+4. Issue の順に実装・テスト・コミット。コミットメッセージに \`#N\` を入れ、PR 本文に \`Closes #N\` を全 Issue 分書く。
 5. 依存の見落としに気づいたら issue_plan_update action=depend、後回しにするなら action=defer で記録する。
-6. PR を出したら action=finish。Issue のクローズは GitHub 側で起き、次回同期で計画から消える。
+6. 実装が終わったら、push・PR・マージの前でも **action=finish**。Issue は「クローズ待ち」になって推奨から外れ、GitHub でクローズされた次回同期で計画から消える。
+   途中でやめるだけなら action=stop、クローズ待ちの Issue がまだ終わっていなければ action=reopen issue=N。
+7. issue_plan_read の「クローズ待ち」に残っている Issue は、表示された次の一手（push / PR 作成 / マージ / クローズ）をユーザーに伝える。
 
-ユーザーは /issues（計画表示）、/issues next（次のパッケージを開始）、/issues defer N、/issues pin N、/issues sync でも操作できます。
+ユーザーは /issues（計画表示）、/issues next（次のパッケージを開始）、/issues done、/issues reopen N、/issues defer N、/issues pin N、/issues sync でも操作できます。
 `,
 } as const

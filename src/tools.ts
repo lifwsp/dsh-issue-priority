@@ -109,14 +109,15 @@ export function createPlanReadTool(runtime: IssuePlanRuntime) {
     output: textOutput,
     async execute(args, exec) {
       const repo = await runtime.resolveRepoFor(exec.agent, args.repo)
-      const { state, plan } = await runtime.ensurePlan(repo, { force: args.refresh, signal: exec.signal })
+      const cwd = runtime.cwdFor(exec.agent)
+      const { state, plan } = await runtime.ensurePlan(repo, { force: args.refresh, signal: exec.signal, cwd })
       const details = (args.issues ?? []).map((n) => state.issues[String(n)]).filter(Boolean)
       const next = nextPackage(plan)
       const text = [
         renderPlan(state, plan),
         ...details.map((i) => `\n--- #${i!.number} ${i!.title} (${i!.htmlUrl}) ---\n${i!.body}`),
       ].join('\n')
-      return json({ repo, plan, next: next?.id ?? null, inProgress: state.inProgress, text })
+      return json({ repo, plan, next: next?.id ?? null, inProgress: state.inProgress, awaitingClose: plan.awaitingClose ?? [], text })
     },
   })
 }
@@ -126,18 +127,24 @@ export function createPlanUpdateTool(runtime: IssuePlanRuntime) {
     name: 'issue_plan_update',
     description:
       'Record local planning facts (stored only on this machine, never on GitHub): defer/pin/clear an issue, ' +
-      'add or remove a dependency you discovered ("#A must wait for #B"), or mark which issues are in progress / done with. ' +
+      'add or remove a dependency you discovered ("#A must wait for #B"), or mark which issues are in progress / finished. ' +
+      'Call finish as soon as the implementation is done (even before push / PR / merge): finished issues stay open on GitHub ' +
+      'but leave the recommendations as "awaiting close" until GitHub reports them closed. ' +
+      'Branches and PRs that reference issues (`Closes #N`, branch `issues/wp-N`) are also detected automatically. ' +
       'The plan is rebuilt immediately.',
     parameters: {
       action: {
         type: 'string',
-        enum: ['defer', 'pin', 'clear', 'depend', 'undepend', 'start', 'finish'],
+        enum: ['defer', 'pin', 'clear', 'depend', 'undepend', 'start', 'finish', 'stop', 'reopen'],
         required: true,
-        description: 'defer/pin/clear: override for `issue`. depend/undepend: `issue` waits for `dependsOn`. start: mark `issues` in progress. finish: clear in-progress.',
+        description:
+          'defer/pin/clear: override for `issue`. depend/undepend: `issue` waits for `dependsOn`. ' +
+          'start: mark `issues` in progress. finish: implementation done → awaiting close (default: everything in progress, or `issues`). ' +
+          'stop: stop working without finishing (back into the plan). reopen: `issue` is not done after all (back into the plan).',
       },
       issue: { type: 'integer', description: 'Target issue (defer/pin/clear/depend/undepend).' },
       dependsOn: { type: 'integer', description: 'Prerequisite issue (depend/undepend).' },
-      issues: { type: 'array', items: { type: 'integer' }, description: 'Issues being worked on together (start).' },
+      issues: { type: 'array', items: { type: 'integer' }, description: 'Issues being worked on together (start), or finished (finish; default: all in progress).' },
       note: { type: 'string', description: 'Why (depend).' },
       repo: { type: 'string', description: 'owner/name. Default: detected from the session working directory.' },
     },
@@ -149,7 +156,8 @@ export function createPlanUpdateTool(runtime: IssuePlanRuntime) {
         if (v == null) throw new Error(`action=${args.action} には ${name} が必要です。`)
         return v
       }
-      const branch = args.action === 'start' ? await runtime.branchFor(exec.agent) : null
+      const branch = await runtime.branchFor(exec.agent)
+      let finished: number[] = []
       const { state, plan } = await runtime.mutate(
         repo,
         (s) => {
@@ -170,13 +178,26 @@ export function createPlanUpdateTool(runtime: IssuePlanRuntime) {
               runtime.setInProgress(s, args.issues, branch)
               break
             case 'finish':
+              finished = runtime.finish(s, args.issues, branch)
+              if (!finished.length) throw new Error('action=finish: 作業中の Issue がありません。issues で番号を指定してください。')
+              break
+            case 'stop':
               runtime.setInProgress(s, null)
               break
+            case 'reopen':
+              runtime.reopen(s, need(args.issue, 'issue'))
+              break
           }
+          if (args.action !== 'start' && args.action !== 'finish') runtime.noteBranch(s, branch)
         },
         exec.signal,
+        runtime.cwdFor(exec.agent),
       )
-      return json({ ok: true, repo, action: args.action, plan, text: `更新しました (${args.action})。\n\n${renderPlan(state, plan, { limit: 5 })}` })
+      const head =
+        args.action === 'finish'
+          ? `${finished.map((n) => `#${n}`).join(' ')} を実装完了（クローズ待ち）にしました。GitHub で閉じられるまで推奨から外します。`
+          : `更新しました (${args.action})。`
+      return json({ ok: true, repo, action: args.action, plan, text: `${head}\n\n${renderPlan(state, plan, { limit: 5 })}` })
     },
   })
 }
