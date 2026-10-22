@@ -97,48 +97,43 @@ async function decisionClient(ctx: AnyCtx, config: ResolvedConfig): Promise<Deci
 }
 
 /**
- * Mount the loopback RPC channel the better-sidebar tab talks to. Optional:
- * without the `connection` service the tab just shows "host unavailable".
- * Retries for a while because a reload can still hold the channel.
+ * Mount the RPC channel the better-sidebar tab talks to.
+ *
+ * `connection.rpc.handle()` registers a prefix route through
+ * `owner.webServer.register()` on the context that READ the service, so that
+ * context must have `webServer` (and `connection`) injected — otherwise the
+ * registration fails and the browser gets the SPA fallback's HTTP 405. A nested
+ * `ctx.inject` keeps the plugin itself loadable on headless profiles.
  */
 function mountRpc(ctx: AnyCtx, runtime: IssuePlanRuntime, logger: Logger): void {
   const dispatch = createRpcHandler({
     runtime,
     agents: () => {
       const agents = ctx.get?.('agents') as { list?: () => unknown[] } | undefined
-      return (agents?.list?.() ?? []) as never
+      try {
+        return (agents?.list?.() ?? []) as never
+      } catch {
+        return [] as never
+      }
     },
   })
-  const handler = (endpoint: string, payload: unknown, signal?: AbortSignal) => dispatch(endpoint, payload, signal)
-  const mountOnce = (): (() => unknown) | undefined => {
-    const connection = ctx.get?.('connection') as { rpc?: { handle?: (channel: string, h: typeof handler, opts?: unknown) => unknown } } | undefined
-    const handle = connection?.rpc?.handle
-    if (typeof handle !== 'function') return undefined
-    try {
-      const release = handle.call(connection!.rpc, RPC_CHANNEL, handler, { authority: 'loopback' })
-      return typeof release === 'function' ? (release as () => unknown) : undefined
-    } catch (error) {
-      logger.debug('rpc mount failed', { error: error instanceof Error ? error.message : String(error) })
-      return undefined
+  if (typeof ctx.inject !== 'function') {
+    logger.warn('ctx.inject unavailable; sidebar tab disabled')
+    return
+  }
+  ctx.inject(['connection', 'webServer'], (inner: AnyCtx) => {
+    const connection = inner.get('connection') as { rpc?: { handle?: (channel: string, h: unknown) => unknown } } | undefined
+    const rpc = connection?.rpc
+    if (!rpc || typeof rpc.handle !== 'function') {
+      logger.warn('connection.rpc.handle unavailable; sidebar tab disabled')
+      return
     }
-  }
-  let release = mountOnce()
-  let retry: (() => void) | undefined
-  if (!release && typeof ctx.interval === 'function') {
-    let attempts = 0
-    retry = ctx.interval(() => {
-      attempts += 1
-      release = mountOnce()
-      if (release || attempts >= 30) {
-        if (!release) logger.warn('sidebar RPC channel could not be mounted; the sidebar tab will be unavailable')
-        retry?.()
-        retry = undefined
-      }
-    }, 1000) as () => void
-  }
-  ctx.effect?.(() => () => {
-    retry?.()
-    void release?.()
+    try {
+      rpc.handle(RPC_CHANNEL, (endpoint: string, payload: unknown, signal?: AbortSignal) => dispatch(endpoint, payload, signal))
+      logger.info('sidebar RPC channel mounted', { channel: RPC_CHANNEL })
+    } catch (error) {
+      logger.warn('sidebar RPC channel could not be mounted', { error: error instanceof Error ? error.message : String(error) })
+    }
   })
 }
 

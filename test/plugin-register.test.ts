@@ -31,4 +31,26 @@ describe('plugin registration', () => {
     expect(ctx.interval).toHaveBeenCalledWith(expect.any(Function), 60 * 60_000)
     for (const d of disposers) d()
   })
+
+  it('mounts the sidebar RPC channel through a nested inject of connection + webServer', () => {
+    const handle = vi.fn(() => () => {})
+    const injected: string[][] = []
+    const inner = { get: (n: string) => (n === 'connection' ? { rpc: { handle } } : undefined) }
+    const ctx = {
+      tools: { register: () => () => {} },
+      commands: { register: () => () => {} },
+      skills: { register: () => () => {} },
+      effect: () => {},
+      get: () => undefined,
+      inject: (deps: string[], fn: (c: unknown) => void) => {
+        injected.push(deps)
+        fn(inner)
+      },
+      interval: () => () => {},
+      setTimeout: () => () => {},
+    }
+    apply(ctx as never, { logLevel: 'silent', dataDir: mkdtempSync(join(tmpdir(), 'dip-')) })
+    expect(injected).toEqual([['connection', 'webServer']])
+    expect(handle).toHaveBeenCalledWith('/dsh-issue-priority', expect.any(Function))
+  })
 })
