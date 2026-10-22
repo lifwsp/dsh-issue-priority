@@ -67,7 +67,7 @@ acceptance: トークン期限切れ時に自動更新される
 ### 起票側の提供物
 
 - **tool `issue_draft`**：項目を受け取り検証し、ブロック付き本文を返す。GitHub へは書き込まない（作成はエージェントが `gh issue create` で行う）。
-- **skill `issue-authoring`**：`ctx.skills.register()` で登録。「Issue を立てるときは `issue_draft` を使う」「`files` はコードを確認してから書く」等の手順。
+- **skill `issue-authoring`**：`ctx.skills.register()` で登録。本文を書く前に Issue の単位を設計させる（論点の棚卸し → 既存 Issue の確認 → 分割・統合・追記先の判断 → Issue ごとに主成果と完了条件 → 計画項目の見積もり → `issue_draft` → 起票 → 分け方の報告）。「1 Issue = 1 つの主成果で、独立して優先順位付け・採否判断・着手・検証・完了判断できる単位」を原則とし、同じセッションで片付けたい Issue は統合せず作業パッケージに任せる。形式の準拠（`issue_draft` が検証）と単位の妥当性は別の確認事項として扱う。計画器にはまとめ Issue（Epic）の概念がないため、まとめ Issue は原則作らず、共有の背景は各 Issue から参照させる。
 - AGENTS.md には何も追記しない（ユーザー所有ファイルであり、毎ターンのトークン消費にもなるため）。
 
 ## 5. 計画の組み立て

@@ -23,15 +23,20 @@ export function createIssueDraftTool(runtime: IssuePlanRuntime) {
       'ALWAYS call this before creating or editing any GitHub Issue (gh issue create/edit, GitHub API, MCP, etc.), ' +
       'even when the user just says "Issue 起票して" / "file an issue" without mentioning the plan block. ' +
       'Returns the final body (block appended/replaced) plus the known `areas` vocabulary — reuse those names. ' +
-      'Does NOT create the Issue; post the returned body yourself (e.g. `gh issue create --body-file`).',
+      'Does NOT create the Issue; post the returned body yourself (e.g. `gh issue create --body-file`). ' +
+      'A valid block only proves the FORMAT, not that the issue is a sensible unit: design the issue units first ' +
+      '(issue-authoring skill) — one primary outcome per issue that can be prioritized, accepted/rejected, started, verified and closed on its own. ' +
+      'Do not bundle independent findings just because they came from the same request, screen or conversation; ' +
+      'add evidence to an existing issue with the same outcome instead of filing a duplicate; ' +
+      'call this once per issue, and leave same-session batching to the planner\'s work packages.',
     parameters: {
       title: { type: 'string', required: true, description: 'Issue title.' },
       body: { type: 'string', required: true, description: 'Human-readable Issue body (markdown). Any existing dsh-plan block is replaced.' },
       areas: { type: 'array', items: { type: 'string' }, required: true, description: 'Kebab-case area names, e.g. ["auth","ui"]. Prefer existing names.' },
       size: { type: 'string', enum: ['S', 'M', 'L'], required: true, description: 'S ≈ under an hour, M ≈ half a day, L ≈ a day or more.' },
       files: { type: 'array', items: { type: 'string' }, description: 'Repo-relative paths or globs likely to change (e.g. src/auth/**).' },
-      dependsOn: { type: 'array', items: { type: 'integer' }, description: 'Issue numbers that must be done first.' },
-      acceptance: { type: 'string', description: 'One-line acceptance criterion.' },
+      dependsOn: { type: 'array', items: { type: 'integer' }, description: 'Issue numbers that must be done first. Merely related issues belong as links in the body, not here.' },
+      acceptance: { type: 'string', description: 'One-line acceptance criterion for this issue\'s single primary outcome (not a list of separate items to consider).' },
       repo: { type: 'string', description: 'owner/name. Default: detected from the session working directory.' },
     },
     isConcurrencySafe: () => true,
