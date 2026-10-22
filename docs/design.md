@@ -15,8 +15,8 @@ Issue がたまっていく中で、DSH を開いて `/issues next`（または�
 
 | 項目 | 決定 |
 | --- | --- |
-| 費用 | バックグラウンド処理で LLM を使わない。判断は Decision Model（Jev）と決定論コードのみ |
-| 判定タイミング | 差分があったときだけ Jev を呼ぶ（Issue の `updated_at` / 本文ハッシュが変わったもの） |
+| 費用 | バックグラウンド処理で LLM を使わない。判断は Decision Model（LiquidAI d1）と決定論コードのみ |
+| 判定タイミング | 差分があったときだけ d1 を呼ぶ（Issue の `updated_at` / 本文ハッシュが変わったもの） |
 | 利用者 | 1 人。並列実行機能は作らないが、データ構造は「同時に着手可能なパッケージ一覧」を出せる形にする |
 | 保存 | ローカル完結（リポジトリにはコミットしない） |
 | GitHub 書き込み | プラグインは書き込まない。Issue のクローズは PR の `Closes #N` に任せ、プラグインは closed を取得するだけ |
@@ -31,7 +31,7 @@ LLM の費用がかかるのは、人が DSH を開いて作業するとき（�
  skill: issue-authoring           タイマー(1h) / /issues 実行時          /issues next
  tool: issue_draft      ──GitHub──▶ 差分取得                         ──▶ 計画を提示 → 承認
   └ dsh-plan ブロック付き本文        ブロック解析 / 依存抽出               ブランチ作成・goal 設定
-                                   候補ペアのみ Jev 判定                 Issue 本文と acceptance を読む
+                                   候補ペアのみ d1 判定                 Issue 本文と acceptance を読む
                                    パッケージ化・トポロジカル順          PR に Closes #N
                                    ローカル保存（差分記録）
 ```
@@ -77,7 +77,7 @@ acceptance: トークン期限切れ時に自動更新される
 1. GitHub 標準の Issue 依存関係（blocked by）
 2. `dsh-plan` の `dependsOn`
 3. 本文中の `blocked by #N` 等（既存 `parseDependencies` を流用）
-4. Jev の推定 —— **推奨順としてのみ扱い、着手を止める理由にはしない**
+4. d1 の推定 —— **推奨順としてのみ扱い、着手を止める理由にはしない**
 
 1〜3 はハード制約（未クローズの依存先がある間は `blocked`）。循環は検出して `needsHuman` に回す。
 
@@ -85,10 +85,10 @@ acceptance: トークン期限切れ時に自動更新される
 
 次の両方を満たすとき同じパッケージにする。
 
-1. `files` が重なる（ディレクトリ一致は「近い」とみなす）、または `areas` が一致し、**かつ** Jev が「同じ変更で片付けるべき」と判定した
+1. `files` が重なる（ディレクトリ一致は「近い」とみなす）、または `areas` が一致し、**かつ** d1 が「同じ変更で片付けるべき」と判定した
 2. パッケージの `size` 合計が M×2 以下（S=1, M=2, L=4 換算で合計 4 以下）
 
-### 5.3 Jev で判定すること（これ以外には使わない）
+### 5.3 d1 で判定すること（これ以外には使わない）
 
 | 判定 | 対象 | 型 |
 | --- | --- | --- |
@@ -120,7 +120,7 @@ acceptance: トークン期限切れ時に自動更新される
       "issues": [12, 7],                         // この順で 1 セッション
       "dependsOn": [],                           // 他パッケージ id
       "rationale": [{ "kind": "files-overlap", "files": ["src/auth/token.ts"] },
-                    { "kind": "jev-merge", "p": 0.82 }],
+                    { "kind": "decision-merge", "p": 0.82 }],
       "size": 3,
       "status": "ready"                          // ready | blocked | in_progress | done
     }
@@ -138,7 +138,7 @@ acceptance: トークン期限切れ時に自動更新される
 ### 7.1 同期
 
 - プラグイン内タイマー（`cordis-plugin-timer`）で 1 時間ごと、および `/issues` 実行時。
-- `since=syncedUntil` で差分のみ取得。変化した Issue と、その Issue が関わる候補ペアだけ Jev に送る。差分がなければ Jev は呼ばない。
+- `since=syncedUntil` で差分のみ取得。変化した Issue と、その Issue が関わる候補ペアだけ d1 に送る。差分がなければ d1 は呼ばない。
 - DSH の `schedule` は使わない（エージェント経由で LLM 費用が発生するため）。
 
 ### 7.2 コマンド（`ctx.commands`）
@@ -159,22 +159,41 @@ worktree はオプション（既定オフ）。
 
 ## 8. プライバシー
 
-叩き台の方針を維持する。`allowExternalJudgment: false` が既定で、Jev が外部送信するプロバイダ（live / openrouter）の場合は判定を拒否する。
+`allowExternalJudgment: false` が既定。false の間は d1 に何も送らず、決定的ルールだけで計画する（計画の注記にそう出る）。true にすると、Issue のタイトル・ラベル・本文先頭 1200 字・areas/files が d1（api.liquid.ai または OpenRouter）に送られる。
 
-## 9. 叩き台からの流用と作り直し
+## 9. 実装（v0.2.0）
 
-| 既存 | 扱い |
+| ファイル | 役割 |
 | --- | --- |
-| `src/github/rest-adapter.ts` | 流用。`since` による差分取得、closed 取得、Issue 依存関係 API を追加 |
-| `src/github/dependencies.ts` | 流用（依存情報源 3） |
-| `src/decision/jev-evaluator.ts` | 骨格（タイムアウト・egress 拒否・並列プール）を流用。質問を 5.3 の 3 種に差し替え |
-| `src/cache/evaluation-cache.ts` | メモリキャッシュ → ローカル永続の判定ストアに作り直し |
-| `src/ranking/policy.ts` | 廃止。パッケージ化とトポロジカル順の `src/plan/` に置き換え |
-| `src/tools/prioritize-issues.ts` | 廃止。`issue_draft` / `issue_plan_read` / `issue_plan_update` に置き換え |
-| `src/config.ts`, `src/log.ts` | 流用（設定項目は整理） |
+| `src/plan-block.ts` | dsh-plan ブロックの検証・描画・解析（書式の唯一の定義） |
+| `src/github/rest-adapter.ts` | REST で差分取得（`since`）、コメント、Issue dependencies（`/dependencies/blocked_by`） |
+| `src/decision/client.ts` | System One クライアント（liquid / openrouter、d1） |
+| `src/decision/judge.ts` | 3 種の質問（size+actionable / merge / direction）。入力ハッシュでキャッシュ |
+| `src/plan/planner.ts` | 依存グラフ・循環検出・まとめ・トポロジカル順 |
+| `src/store.ts` | `$DSH_HOME/data/dsh-issue-priority/owner__repo.json` |
+| `src/sync.ts` | 差分同期と再計画（変更なしなら判定 0 件） |
+| `src/runtime.ts` / `src/tools.ts` / `src/commands.ts` / `src/skill.ts` | ツール・`/issues` コマンド・スキル |
 
-## 10. 未決事項
+## 10. 決定済みになった事項
 
-- Jev（live / openrouter）の料金体系。差分判定の頻度で十分に抑えられるかは実測で確認する。
-- GitHub 標準の Issue 依存関係 API の取得方法（REST か GraphQL か）。
-- `ctx.commands` から承認を経てエージェントに着手させる具体的な手段（コマンドがエージェントにプロンプトを送れるか）。
+- **判定モデル**: LiquidAI d1（入力 \$0.02 / 1M トークン、出力無料）。jevcore-dsh は `jev-*` モデルしか通さないため、プラグイン内に専用クライアントを持つ。
+- **依存 API**: REST。理由は §11。
+- **コマンド→エージェント**: `invocation.agent.followup(ユーザーメッセージ)` で着手指示を次ターンとして渡せる（dsh-command-goal と同じ手段）。
+
+## 11. REST と GraphQL の比較（Issue dependencies 取得）
+
+| 観点 | REST | GraphQL |
+| --- | --- | --- |
+| 依存の取得 | 依存がある Issue ごとに 1 リクエスト（`issue_dependencies_summary` で要否が分かるので無駄打ちはない） | 一覧取得のクエリに `blockedBy` を含めれば 1 往復 |
+| 差分取得 | `since` パラメータがそのまま使える | `filterBy: {since}` があるが、ページングとの組み合わせが煩雑 |
+| レート制限 | 5000 リクエスト/時。毎時同期の差分なら数件〜数十件 | ポイント制。ノード数で計算され見積もりにくい |
+| 認証 | トークンなしでも公開リポジトリは読める | 必ずトークンが要る |
+| 実装量 | 既存アダプタを流用 | クエリとページングを書き直し |
+
+差分同期では 1 回あたりの Issue が少なく、GraphQL の「1 往復」の利点がほぼ効かないため REST にした。初回の全件取得だけは依存の多いリポジトリで遅くなりうるが、毎時同期の範囲では問題にならない。
+
+## 12. 未決事項
+
+- d1 の実コスト。d1 は質問ごとに state を含めて課金される。目安は 1 質問 ≈ 400〜800 トークン。初回 100 Issue なら size 100 件 + まとめ候補ペア数十件で約 10 万トークン ≈ \$0.002。以後は差分のみ。実測で確認する。
+- バックグラウンド同期はプラグインのプロセスが生きている間だけ動く（DSH を閉じている間は止まり、起動 30 秒後に追いつく）。
+- 判定のしきい値（merge 0.6 / actionable 0.35 / direction 0.6）は実データで調整する。

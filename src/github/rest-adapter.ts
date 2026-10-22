@@ -1,9 +1,7 @@
-import type { GitHubIssue, RelatedPullRequest } from '../types.js'
-import { GitHubAdapterError, type GitHubIssueAdapter, type ListIssuesOptions } from './adapter.js'
-import { parseDependencies } from './dependencies.js'
+import { GitHubAdapterError, type FetchedIssue, type GitHubIssueSource, type ListIssuesSinceOptions } from './adapter.js'
 
 const DEFAULT_API_BASE = 'https://api.github.com'
-const USER_AGENT = 'dsh-issue-priority/0.1.0'
+const USER_AGENT = 'dsh-issue-priority/0.2.0'
 const RETRYABLE = new Set([403, 429])
 
 export interface RestGitHubAdapterOptions {
@@ -29,18 +27,20 @@ interface GhIssueRaw {
   comments: number
   pull_request?: unknown
   state: string
+  closed_at?: string | null
+  issue_dependencies_summary?: { blocked_by?: number; total_blocked_by?: number; blocking?: number }
+}
+
+interface GhDependencyRaw {
+  number?: number
+  state?: string
+  repository_url?: string
 }
 
 interface GhCommentRaw {
   body?: string
   user?: { login?: string }
   created_at?: string
-}
-
-interface GhTimelineRaw {
-  event?: string
-  source?: { issue?: { number?: number; pull_request?: unknown; html_url?: string; title?: string; state?: string } }
-  cross_repository?: unknown
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -100,7 +100,7 @@ async function mapPool<T, R>(items: readonly T[], concurrency: number, fn: (item
   return results
 }
 
-export class RestGitHubAdapter implements GitHubIssueAdapter {
+export class RestGitHubAdapter implements GitHubIssueSource {
   readonly id = 'github-rest'
   private readonly token?: string
   private readonly baseUrl: string
@@ -122,69 +122,60 @@ export class RestGitHubAdapter implements GitHubIssueAdapter {
     return [...this.methodsUsed]
   }
 
-  async listOpenIssues(options: ListIssuesOptions): Promise<GitHubIssue[]> {
+  /**
+   * Initial sync (no `since`): all open issues. Incremental sync: every issue
+   * (open or closed) updated since the timestamp, so closures are observed.
+   * Pull requests are skipped. Comments and native dependencies are fetched
+   * only when the list payload says they exist.
+   */
+  async listIssuesSince(options: ListIssuesSinceOptions): Promise<FetchedIssue[]> {
     const repo = resolveRepo(options.repo)
     const [owner, name] = repo.split('/') as [string, string]
-    const limit = Math.max(1, Math.min(options.limit, 100))
+    const cap = Math.max(1, options.maxIssues)
     const collected: GhIssueRaw[] = []
-    let page = 1
-
-    while (collected.length < limit) {
-      const perPage = Math.min(100, limit - collected.length)
-      const batch = (await this.request<GhIssueRaw[]>(
-        'GET',
-        `/repos/${owner}/${name}/issues`,
-        {
+    for (let page = 1; collected.length < cap; page += 1) {
+      const batch =
+        (await this.request<GhIssueRaw[]>('GET', `/repos/${owner}/${name}/issues`, {
           query: {
-            state: 'open',
-            per_page: String(perPage),
+            state: options.since ? 'all' : 'open',
+            per_page: '100',
             page: String(page),
             sort: 'updated',
             direction: 'desc',
-            ...(options.labels?.length ? { labels: options.labels.join(',') } : {}),
+            ...(options.since ? { since: options.since } : {}),
           },
           signal: options.signal,
-        },
-      )) ?? []
-
-      if (batch.length === 0) break
+        })) ?? []
       for (const item of batch) {
-        // GitHub's /issues endpoint includes pull requests; skip them.
         if (item.pull_request !== undefined) continue
         collected.push(item)
-        if (collected.length >= limit) break
+        if (collected.length >= cap) break
       }
-      if (batch.length < perPage) break
-      page += 1
+      if (batch.length < 100) break
     }
 
     return mapPool(collected, this.concurrency, async (raw) => {
-      const comments = await this.fetchCommentBodies(owner, name, raw.number, options.signal)
-      const relatedPrs = await this.fetchRelatedPulls(owner, name, raw.number, options.signal)
-      const texts = [raw.body ?? '', ...comments]
-      const deps = parseDependencies(texts)
-
+      const comments =
+        (raw.comments ?? 0) > 0 ? await this.fetchCommentBodies(owner, name, raw.number, options.signal) : []
+      const summary = raw.issue_dependencies_summary
+      const nativeBlockedBy =
+        raw.state === 'open' && ((summary?.blocked_by ?? 0) > 0 || (summary?.total_blocked_by ?? 0) > 0)
+          ? await this.fetchBlockedBy(owner, name, raw.number, options.signal)
+          : []
       return {
         number: raw.number,
         title: raw.title,
         body: raw.body ?? '',
-        url: raw.url,
         htmlUrl: raw.html_url,
-        labels: (raw.labels ?? []).map((l) =>
-          typeof l === 'string' ? { name: l } : { name: l.name ?? '', color: l.color },
-        ).filter((l) => l.name),
-        milestone: raw.milestone
-          ? { title: raw.milestone.title, state: raw.milestone.state, dueOn: raw.milestone.due_on ?? null }
-          : null,
-        assignees: (raw.assignees ?? []).map((a) => ({ login: a.login })),
-        createdAt: raw.created_at,
+        state: raw.state === 'closed' ? 'closed' : 'open',
+        labels: (raw.labels ?? [])
+          .map((l) => (typeof l === 'string' ? l : (l.name ?? '')))
+          .filter(Boolean),
         updatedAt: raw.updated_at,
-        commentsCount: raw.comments ?? 0,
-        blockedBy: deps.blockedBy.filter((n) => n !== raw.number),
-        blocks: deps.blocks.filter((n) => n !== raw.number),
-        relatedPullRequests: relatedPrs,
-        commentSummaries: comments.slice(0, 5).map((c) => c.slice(0, 400)),
-      } satisfies GitHubIssue
+        closedAt: raw.closed_at ?? null,
+        nativeBlockedBy,
+        comments,
+      } satisfies FetchedIssue
     })
   }
 
@@ -209,37 +200,28 @@ export class RestGitHubAdapter implements GitHubIssueAdapter {
     return bodies
   }
 
-  private async fetchRelatedPulls(
+  /** GitHub issue dependencies (REST, 2025+). Missing feature/permission → []. */
+  private async fetchBlockedBy(
     owner: string,
     name: string,
     issueNumber: number,
     signal?: AbortSignal,
-  ): Promise<RelatedPullRequest[]> {
+  ): Promise<number[]> {
     try {
-      const events = (await this.request<GhTimelineRaw[]>(
-        'GET',
-        `/repos/${owner}/${name}/issues/${issueNumber}/timeline`,
-        {
-          query: { per_page: '30' },
-          signal,
-          headers: { accept: 'application/vnd.github+json' },
-        },
-      )) ?? []
-      const prs: RelatedPullRequest[] = []
-      for (const ev of events) {
-        const src = ev.source?.issue
-        if (!src?.pull_request || typeof src.number !== 'number') continue
-        prs.push({
-          number: src.number,
-          title: src.title ?? `PR #${src.number}`,
-          url: src.html_url ?? `https://github.com/${owner}/${name}/pull/${src.number}`,
-          state: src.state ?? 'unknown',
-        })
-      }
-      const seen = new Set<number>()
-      return prs.filter((p) => (seen.has(p.number) ? false : (seen.add(p.number), true)))
-    } catch {
-      // Timeline is optional; missing permission must not fail prioritization.
+      const items =
+        (await this.request<GhDependencyRaw[]>(
+          'GET',
+          `/repos/${owner}/${name}/issues/${issueNumber}/dependencies/blocked_by`,
+          { query: { per_page: '100' }, signal },
+        )) ?? []
+      const sameRepo = `/repos/${owner}/${name}/`.toLowerCase()
+      return items
+        .filter((d) => d.state !== 'closed')
+        .filter((d) => !d.repository_url || `${d.repository_url}/`.toLowerCase().endsWith(sameRepo))
+        .map((d) => d.number)
+        .filter((n): n is number => typeof n === 'number' && n !== issueNumber)
+    } catch (error) {
+      if (signal?.aborted) throw error
       return []
     }
   }
@@ -324,4 +306,14 @@ export class RestGitHubAdapter implements GitHubIssueAdapter {
       )
     }
   }
+}
+
+/** Parse `owner/repo` from a git remote URL (https or ssh). Returns null for non-GitHub remotes. */
+export function repoFromRemoteUrl(remote: string): string | null {
+  const raw = remote.trim()
+  const m =
+    raw.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?\/?$/i) ??
+    raw.match(/^ssh:\/\/git@github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/?$/i) ??
+    raw.match(/^https?:\/\/(?:[^@/]+@)?github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/?$/i)
+  return m ? m[1]! : null
 }

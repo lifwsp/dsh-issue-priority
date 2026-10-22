@@ -1,46 +1,34 @@
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { apply, name, inject } from '../src/index.js'
+import { apply, inject, name } from '../src/index.js'
 
 describe('plugin registration', () => {
-  it('registers prioritize_issues via tools and cleans up through effect dispose', () => {
+  it('registers tools, the /issues command and skills, all disposable', () => {
     expect(name).toBe('dsh-issue-priority')
-    expect(inject).toContain('tools')
-
+    expect(inject).toEqual(expect.arrayContaining(['tools', 'commands', 'skills']))
     const disposers: Array<() => void> = []
-    const register = vi.fn((tool: { name: string }) => {
-      expect(tool.name).toBe('prioritize_issues')
-      return () => {
-        /* unregister */
-      }
-    })
-
+    const tools = vi.fn(() => () => {})
+    const commands = vi.fn(() => () => {})
+    const skills = vi.fn(() => () => {})
     const ctx = {
-      tools: { register },
+      tools: { register: tools },
+      commands: { register: commands },
+      skills: { register: skills },
       effect: (fn: () => (() => void) | void) => {
-        const dispose = fn()
-        if (typeof dispose === 'function') disposers.push(dispose)
+        const d = fn()
+        if (typeof d === 'function') disposers.push(d)
       },
-      get: (key: string) => {
-        if (key === 'jev') {
-          return {
-            providerId: 'mock',
-            transmitting: false,
-            ask: async () => ({
-              model: 'mock',
-              provider: 'mock',
-              warning: 'synthetic',
-              answers: {},
-            }),
-          }
-        }
-        return undefined
-      },
-      logger: () => console,
+      get: () => undefined,
+      interval: vi.fn(() => () => {}),
+      setTimeout: vi.fn(() => () => {}),
     }
-
-    apply(ctx as never, { logLevel: 'silent', allowExternalJudgment: false })
-    expect(register).toHaveBeenCalledTimes(1)
-    // Simulate unload: run disposers (Cordis does this when the fiber exits).
+    apply(ctx as never, { logLevel: 'silent', dataDir: mkdtempSync(join(tmpdir(), 'dip-')) })
+    expect(tools.mock.calls.map((c: any[]) => c[0].name).sort()).toEqual(['issue_draft', 'issue_plan_read', 'issue_plan_update'])
+    expect(commands.mock.calls.map((c: any[]) => c[0].name)).toEqual(['issues'])
+    expect(skills.mock.calls.map((c: any[]) => c[0].name).sort()).toEqual(['issue-authoring', 'issue-work'])
+    expect(ctx.interval).toHaveBeenCalledWith(expect.any(Function), 60 * 60_000)
     for (const d of disposers) d()
   })
 })

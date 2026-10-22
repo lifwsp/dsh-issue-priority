@@ -1,0 +1,58 @@
+import { describe, expect, it } from 'vitest'
+import { createMemoryStore } from '../src/store.js'
+import { SyncService, toIssueRecord } from '../src/sync.js'
+import { block, FakeDecision, FakeGitHub, fetched, silentLogger } from './helpers.js'
+
+const settings = () => ({ maxIssues: 300, maxQuestionsPerSync: 200, mergeThreshold: 0.6, actionableThreshold: 0.35, directionThreshold: 0.6, maxPackageSize: 4 })
+
+describe('toIssueRecord', () => {
+  it('parses block, text deps and mentions', () => {
+    const r = toIssueRecord(fetched(5, { body: 'see #7, blocked by #3', planBlock: block({ areas: ['ui'] }), comments: ['depends on #4'] }))
+    expect(r.block?.areas).toEqual(['ui'])
+    expect(r.textBlockedBy.sort()).toEqual([3, 4])
+    expect(r.mentions).toEqual(expect.arrayContaining([3, 7]))
+    expect(r.body).not.toContain('dsh-plan')
+  })
+})
+
+describe('SyncService', () => {
+  it('syncs incrementally and only judges changed issues', async () => {
+    const gh = new FakeGitHub([fetched(1), fetched(2, { updatedAt: '2026-10-02T00:00:00Z' })])
+    const client = new FakeDecision((qid) => (qid === 'size' ? { type: 'score', score: 1, probabilities: {} } : { type: 'noul', noul: 0.9 }))
+    const store = createMemoryStore()
+    const svc = new SyncService({ github: () => gh, decision: () => client, store, logger: silentLogger, settings })
+
+    const first = await svc.sync('o/r')
+    expect(first.fetched).toBe(2)
+    expect(first.plan.workPackages).toHaveLength(2)
+    const asked = client.requests.length
+    expect(asked).toBe(2)
+
+    // Nothing changed upstream → no judging, plan reused.
+    const second = await svc.sync('o/r')
+    expect(gh.calls[1]?.since).toBe('2026-10-02T00:00:00Z')
+    expect(second.unchanged).toBe(true)
+    expect(client.requests.length).toBe(asked)
+
+    // #1 closes, #3 appears.
+    gh.issues = [
+      fetched(1, { state: 'closed', updatedAt: '2026-10-03T00:00:00Z', closedAt: '2026-10-03T00:00:00Z' }),
+      fetched(2, { updatedAt: '2026-10-02T00:00:00Z' }),
+      fetched(3, { updatedAt: '2026-10-03T00:00:00Z' }),
+    ]
+    const third = await svc.sync('o/r')
+    expect(third.closed).toEqual([1])
+    expect(third.changed).toEqual([3])
+    expect(client.requests.length).toBe(asked + 1)
+    expect(third.plan.changesSinceLast.closed).toEqual([1])
+    expect(third.plan.changesSinceLast.new).toEqual([3])
+  })
+
+  it('works with no decision model', async () => {
+    const gh = new FakeGitHub([fetched(1)])
+    const svc = new SyncService({ github: () => gh, decision: () => null, store: createMemoryStore(), logger: silentLogger, settings })
+    const res = await svc.sync('o/r')
+    expect(res.plan.decision.available).toBe(false)
+    expect(res.plan.workPackages[0]?.sizeSource['1']).toBe('default')
+  })
+})

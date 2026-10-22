@@ -1,104 +1,182 @@
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
+import { createIssuesCommand } from './commands.js'
 import { Config, resolveLiveConfig, type ResolvedConfig } from './config.js'
-import { createMemoryCache, type EvaluationCache } from './cache/evaluation-cache.js'
+import { HttpDecisionClient, type DecisionClient } from './decision/client.js'
 import { RestGitHubAdapter } from './github/rest-adapter.js'
-import { JevDecisionEvaluator, requireJevService } from './decision/jev-evaluator.js'
-import { DecisionEvaluatorError } from './decision/evaluator.js'
-import { createLogger } from './log.js'
-import { createPrioritizeIssuesTool } from './tools/prioritize-issues.js'
-import type { PipelineDeps } from './pipeline.js'
-import { defaultRankingPolicy } from './ranking/policy.js'
+import { createLogger, type Logger } from './log.js'
+import { IssuePlanRuntime } from './runtime.js'
+import { ISSUE_AUTHORING_SKILL, ISSUE_WORK_SKILL } from './skill.js'
+import { createFileStore, defaultDataDir } from './store.js'
+import { SyncService } from './sync.js'
+import { createIssueDraftTool, createPlanReadTool, createPlanUpdateTool } from './tools.js'
+
+const execFileAsync = promisify(execFile)
 
 export const name = 'dsh-issue-priority'
 /**
- * `tools` is required. `jev` is resolved at call time so a missing jevcore-dsh
- * fails the tool with a clear error instead of leaving this plugin `pending`.
+ * Required core services. `credentials` and `workingDirectory` are looked up
+ * lazily with ctx.get() so their absence degrades (env / process.cwd()) instead
+ * of leaving the plugin pending.
  */
-export const inject = ['tools']
+export const inject = ['tools', 'commands', 'skills']
 
 export { Config }
 export type { PluginConfig } from './config.js'
-export { prioritizeIssues } from './pipeline.js'
-export { rankIssues, computePriorityScore, defaultRankingPolicy, RANKING_POLICY_VERSION } from './ranking/policy.js'
+export { buildPlan } from './plan/planner.js'
+export { validatePlanBlock, parsePlanBlock, renderPlanBlock } from './plan-block.js'
+export { HttpDecisionClient } from './decision/client.js'
 export { RestGitHubAdapter } from './github/rest-adapter.js'
-export { JevDecisionEvaluator } from './decision/jev-evaluator.js'
-export type { DecisionEvaluator } from './decision/evaluator.js'
-export type { GitHubIssueAdapter } from './github/adapter.js'
+export { SyncService } from './sync.js'
 
-function resolveGithubToken(ctx: Context, ref: string): string | undefined {
-  const credentials = ctx.get('credentials') as
-    | { get?: (name: string) => string | undefined | Promise<string | undefined> }
-    | undefined
-  if (credentials?.get) {
+type AnyCtx = Context & Record<string, any>
+
+async function resolveSecret(ctx: AnyCtx, ref: string): Promise<string | undefined> {
+  if (!ref) return undefined
+  const credentials = ctx.get?.('credentials') as { resolve?: (ref: string) => Promise<{ value: string } | undefined> } | undefined
+  if (credentials?.resolve) {
     try {
-      const value = credentials.get(ref)
-      if (typeof value === 'string' && value) return value
+      const hit = await credentials.resolve(ref)
+      if (hit?.value) return hit.value
     } catch {
-      // fall through to env
+      // invalid ref grammar or provider error → env fallback
     }
   }
-  return process.env[ref] || process.env.GITHUB_TOKEN || process.env.GH_TOKEN || undefined
+  return process.env[ref] || undefined
 }
 
-function buildDeps(ctx: Context, config: ResolvedConfig, cache: EvaluationCache): PipelineDeps {
-  const hostLogger = (ctx as Context & { logger?: (n: string) => Console }).logger?.(name)
-  const logger = createLogger(hostLogger ?? console, config.logLevel)
-
-  const github = new RestGitHubAdapter({
-    token: resolveGithubToken(ctx, config.githubTokenRef),
-    baseUrl: config.githubApiBase,
-    maxRetries: config.githubMaxRetries,
-  })
-
-  if (config.evaluator !== 'jev') {
-    throw new DecisionEvaluatorError(
-      `Unsupported evaluator "${String(config.evaluator)}". This build ships only "jev".`,
-      'invalid',
-    )
+let ghTokenCache: { value: string | undefined; at: number } | null = null
+async function ghCliToken(): Promise<string | undefined> {
+  if (ghTokenCache && Date.now() - ghTokenCache.at < 10 * 60_000) return ghTokenCache.value
+  let value: string | undefined
+  try {
+    const { stdout } = await execFileAsync('gh', ['auth', 'token'], { timeout: 5000 })
+    value = stdout.trim() || undefined
+  } catch {
+    value = undefined
   }
+  ghTokenCache = { value, at: Date.now() }
+  return value
+}
 
-  const jev = requireJevService(ctx)
-  const evaluator = new JevDecisionEvaluator({
-    jev,
-    logger,
-    allowExternalJudgment: config.allowExternalJudgment,
-    askTimeoutMs: config.askTimeoutMs,
+async function githubToken(ctx: AnyCtx, config: ResolvedConfig): Promise<string | undefined> {
+  return (
+    (await resolveSecret(ctx, config.githubTokenRef)) ||
+    process.env.GITHUB_TOKEN ||
+    process.env.GH_TOKEN ||
+    (await ghCliToken())
+  )
+}
+
+function defaultKeyRef(config: ResolvedConfig): string {
+  if (config.decisionApiKeyRef) return config.decisionApiKeyRef
+  return config.decisionProvider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'LIQUID_API_KEY'
+}
+
+/** Returns a client, or a reason string why the model is off. */
+async function decisionClient(ctx: AnyCtx, config: ResolvedConfig): Promise<DecisionClient | string> {
+  if (config.decisionProvider === 'none') return 'decisionProvider=none'
+  if (!config.allowExternalJudgment) return 'allowExternalJudgment=false（Issue 内容を外部に送らない設定）'
+  const ref = defaultKeyRef(config)
+  const apiKey = await resolveSecret(ctx, ref)
+  if (!apiKey) return `${ref} が未設定`
+  return new HttpDecisionClient({
+    provider: config.decisionProvider,
+    apiKey,
+    ...(config.decisionModel ? { model: config.decisionModel } : {}),
+    timeoutMs: config.decisionTimeoutMs,
   })
-
-  const baseEvaluate = evaluator.evaluateIssues.bind(evaluator)
-  evaluator.evaluateIssues = (issues, options) =>
-    baseEvaluate(issues, {
-      ...options,
-      concurrency: options.concurrency ?? config.evaluateConcurrency,
-    })
-
-  return {
-    github,
-    evaluator,
-    cache,
-    policy: defaultRankingPolicy({
-      version: config.rankingPolicyVersion,
-      confidenceThreshold: config.confidenceThreshold,
-      weights: config.weights,
-    }),
-    logger,
-    defaultLimit: config.defaultLimit,
-  }
 }
 
 /**
- * Cordis plugin entry. Registration is effect-scoped: unloading the plugin
- * unregisters prioritize_issues.
+ * Cordis plugin entry. All registrations are effect-scoped so unloading the
+ * plugin removes tools, the command, skills and the timer.
  */
-export const apply = (ctx: Context, rawConfig: Record<string, unknown> = {}) => {
-  let cache: EvaluationCache | undefined
+export const apply = (ctx: AnyCtx, rawConfig: Record<string, unknown> = {}) => {
+  const config = () => resolveLiveConfig(rawConfig)
+  const hostLogger = typeof ctx.logger === 'function' ? ctx.logger(name) : undefined
+  const logger: Logger = createLogger(hostLogger ?? console, config().logLevel)
+  const store = createFileStore(config().dataDir || defaultDataDir())
 
-  const getDeps = (): PipelineDeps => {
-    const config = resolveLiveConfig(rawConfig)
-    cache ??= createMemoryCache(config.cacheMaxEntries)
-    return buildDeps(ctx, config, cache)
+  const sync = new SyncService({
+    store,
+    logger,
+    settings: () => {
+      const c = config()
+      return {
+        maxIssues: c.maxIssues,
+        maxQuestionsPerSync: c.maxQuestionsPerSync,
+        mergeThreshold: c.mergeThreshold,
+        actionableThreshold: c.actionableThreshold,
+        directionThreshold: c.directionThreshold,
+        maxPackageSize: c.maxPackageSize,
+      }
+    },
+    github: async () => {
+      const c = config()
+      return new RestGitHubAdapter({ token: await githubToken(ctx, c), baseUrl: c.githubApiBase, maxRetries: c.githubMaxRetries })
+    },
+    decision: async () => {
+      const res = await decisionClient(ctx, config())
+      if (typeof res === 'string') {
+        logger.debug('decision model off', { reason: res })
+        return null
+      }
+      return res
+    },
+  })
+
+  const runtime = new IssuePlanRuntime({
+    store,
+    sync,
+    logger,
+    cwdOf: (agent) => {
+      const wd = ctx.get?.('workingDirectory') as { get?: (session: unknown) => string } | undefined
+      const session = (agent as { session?: unknown } | undefined)?.session
+      if (!wd?.get || !session) return undefined
+      try {
+        return wd.get(session)
+      } catch {
+        return undefined
+      }
+    },
+    decisionStatus: async () => {
+      const res = await decisionClient(ctx, config())
+      return typeof res === 'string' ? res : undefined
+    },
+  })
+
+  ctx.effect(() => ctx.tools.register(createIssueDraftTool(runtime)))
+  ctx.effect(() => ctx.tools.register(createPlanReadTool(runtime)))
+  ctx.effect(() => ctx.tools.register(createPlanUpdateTool(runtime)))
+  ctx.effect(() => ctx.commands.register(createIssuesCommand(runtime)))
+  for (const skill of [ISSUE_AUTHORING_SKILL, ISSUE_WORK_SKILL]) {
+    ctx.effect(() => ctx.skills.register({ ...skill, source: 'runtime' }))
   }
 
-  const tool = createPrioritizeIssuesTool(getDeps)
-  ctx.effect(() => ctx.tools.register(tool))
+  // Background sync: plugin-internal timer, no LLM. Repos become known when a
+  // tool/command first resolves them in this process.
+  const minutes = config().syncIntervalMinutes
+  if (minutes > 0) {
+    const tick = async () => {
+      for (const repo of await store.listRepos().catch(() => [])) runtime.knownRepos.add(repo)
+      for (const repo of runtime.knownRepos) {
+        try {
+          await sync.sync(repo)
+        } catch (error) {
+          logger.warn('background sync failed', { repo, error: error instanceof Error ? error.message : String(error) })
+        }
+      }
+    }
+    const every = minutes * 60_000
+    // First pass shortly after startup so a stale plan is refreshed before the user asks.
+    if (typeof ctx.setTimeout === 'function') ctx.setTimeout(() => void tick(), 30_000)
+    if (typeof ctx.interval === 'function') ctx.interval(() => void tick(), every)
+    else ctx.effect(() => {
+      const h = setInterval(() => void tick(), every)
+      h.unref?.()
+      return () => clearInterval(h)
+    })
+  }
 }

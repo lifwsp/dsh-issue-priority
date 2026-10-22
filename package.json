@@ -1,14 +1,15 @@
 {
   "name": "dsh-issue-priority",
-  "version": "0.1.0",
-  "description": "GitHub Issue prioritization for DeepSeek Harness: fetch issues, judge via pluggable DecisionEvaluator (Jev by default), rank with a deterministic policy.",
+  "version": "0.2.0",
+  "description": "Background GitHub Issue planning for DeepSeek Harness: bundles issues into session-sized work packages and orders them, using deterministic rules plus the LiquidAI d1 decision model (no LLM in the background).",
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
     "github",
-    "issue-priority",
-    "jev",
-    "decision-ai"
+    "issues",
+    "planning",
+    "liquid-d1",
+    "decision-model"
   ],
   "license": "MIT",
   "type": "module",

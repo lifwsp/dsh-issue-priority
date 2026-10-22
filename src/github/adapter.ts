@@ -1,19 +1,32 @@
-import type { GitHubIssue } from '../types.js'
+/** Normalized raw Issue as fetched from GitHub (before plan-block parsing). */
+export interface FetchedIssue {
+  number: number
+  title: string
+  body: string
+  htmlUrl: string
+  state: 'open' | 'closed'
+  labels: string[]
+  updatedAt: string
+  closedAt: string | null
+  /** GitHub native "blocked by" (same repo only). */
+  nativeBlockedBy: number[]
+  /** Comment bodies (only fetched when the issue has comments). */
+  comments: string[]
+}
 
-export interface ListIssuesOptions {
+export interface ListIssuesSinceOptions {
   repo: string
-  limit: number
-  labels?: string[]
+  /** ISO timestamp; omit for a full initial fetch of open issues. */
+  since?: string
+  /** Upper bound on issues returned (safety cap). */
+  maxIssues: number
   signal?: AbortSignal
 }
 
-/**
- * GitHub access seam. MVP uses REST; MCP (or gh CLI) can implement the same
- * interface without changing ranking / evaluation code.
- */
-export interface GitHubIssueAdapter {
+/** Read-only GitHub access seam (REST implementation; tests use fakes). */
+export interface GitHubIssueSource {
   readonly id: string
-  listOpenIssues(options: ListIssuesOptions): Promise<GitHubIssue[]>
+  listIssuesSince(options: ListIssuesSinceOptions): Promise<FetchedIssue[]>
 }
 
 export class GitHubAdapterError extends Error {
