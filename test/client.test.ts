@@ -94,6 +94,8 @@ describe('client bundle', () => {
       overrides: { '2': 'pin' },
       inProgress: { issues: [1], branch: 'issues/P1' },
       usage: { questions: 3, inputTokens: 100 },
+      decisionOff: 'OPENROUTER_API_KEY が未設定',
+      signals: { open: 2, withBlock: 0, withPriority: 0 },
       plan: {
         workPackages: [
           { id: 'P1', issues: [1], dependsOn: [], blockedByExternal: [], rationale: [{ kind: 'files-overlap', issues: [1, 2], files: ['a'] }], size: 1, sizeSource: {}, status: 'in_progress' },
@@ -123,6 +125,9 @@ describe('client bundle', () => {
     expect(all).toContain('#2')
     expect(all).toContain('人の判断が必要')
     expect(all).toContain('作業中を解除')
+    expect(all).toContain('判定モデルが止まっています')
+    expect(all).toContain('dsh-plan ブロックがありません')
+    expect(all).toContain('そのあと')
   })
 
   it('does not throw when every service is missing', () => {

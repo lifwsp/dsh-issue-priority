@@ -14,10 +14,17 @@ import {
   type Override,
   type Plan,
   type PlanWarning,
+  PRIORITY_RANK,
+  type PriorityLevel,
+  type PrioritySource,
   type Rationale,
   type WorkPackage,
 } from '../types.js'
 import { fileOverlap } from './files.js'
+import { labelPriority, textSimilarity } from './signals.js'
+
+/** Bump when planning logic changes so stored plans are rebuilt. */
+export const PLANNER_VERSION = 2
 
 export interface PlannerOptions {
   repo: string
@@ -35,6 +42,8 @@ export interface PlannerOptions {
   mergeThreshold?: number
   actionableThreshold?: number
   directionThreshold?: number
+  /** Minimum text similarity for two block-less issues to become a merge candidate. */
+  similarityThreshold?: number
   maxPackageSize?: number
   /** Hard cap on decision-model questions per run (cache misses only). */
   maxQuestions?: number
@@ -159,6 +168,7 @@ export async function buildPlan(options: PlannerOptions): Promise<Plan> {
     mergeThreshold = 0.6,
     actionableThreshold = 0.35,
     directionThreshold = 0.6,
+    similarityThreshold = 0.1,
     maxPackageSize = 4,
     maxQuestions = 200,
   } = options
@@ -255,6 +265,26 @@ export async function buildPlan(options: PlannerOptions): Promise<Plan> {
     if (!dependsOnMap.has(e.from)) dependsOnMap.set(e.from, [])
     dependsOnMap.get(e.from)!.push(e)
   }
+  // ── 3b. priority: label > decision model > default ─────────────────────
+  const priority = new Map<number, { level: PriorityLevel; score: number; source: PrioritySource }>()
+  const needModel: IssueRecord[] = []
+  for (const issue of eligible) {
+    const fromLabel = labelPriority(issue.labels)
+    if (fromLabel) priority.set(issue.number, { level: fromLabel, score: PRIORITY_RANK[fromLabel], source: 'label' })
+    else needModel.push(issue)
+  }
+  await mapPool(needModel, 4, async (issue) => {
+    const fallback = { level: 'medium' as const, score: 1, source: 'default' as const }
+    if (!budgetLeft()) {
+      if (judge.available) skippedForBudget += 1
+      priority.set(issue.number, fallback)
+      return
+    }
+    const j = await judge.priority(issue, signal)
+    priority.set(issue.number, j ? { level: j.level, score: j.score, source: 'decision' } : fallback)
+  })
+  const prio = (n: number) => priority.get(n) ?? { level: 'medium' as const, score: 1, source: 'default' as const }
+
   const hardBetween = (a: number, b: number) => edgeKey.has(`${a}->${b}`) || edgeKey.has(`${b}->${a}`)
 
   // ── 4. advisory order for mutually-referencing pairs ────────────────────
@@ -305,6 +335,33 @@ export async function buildPlan(options: PlannerOptions): Promise<Plan> {
         strength: ov.exact.length ? 3 : ov.near.length ? 2 : 1,
         rationale,
       })
+    }
+  }
+
+  // Block-less issues: near-duplicate wording is a (weak) candidate signal.
+  // Only the decision model can accept these, and each issue contributes at
+  // most its 3 most similar partners to keep the number of questions small.
+  if (judge.available) {
+    const paired = new Set(candidates.map((c) => `${c.a}-${c.b}`))
+    const sims: Candidate[] = []
+    for (let i = 0; i < eligible.length; i += 1) {
+      const a = eligible[i]!
+      for (let j = i + 1; j < eligible.length; j += 1) {
+        const b = eligible[j]!
+        if (a.block && b.block) continue
+        if (paired.has(`${a.number}-${b.number}`) || hardBetween(a.number, b.number)) continue
+        const s = textSimilarity(a, b)
+        if (s < similarityThreshold) continue
+        sims.push({ a: a.number, b: b.number, strength: s, rationale: [{ kind: 'similar-text', issues: [a.number, b.number], similarity: s }] })
+      }
+    }
+    sims.sort((x, y) => y.strength - x.strength || x.a - y.a || x.b - y.b)
+    const perIssue = new Map<number, number>()
+    for (const c of sims) {
+      if ((perIssue.get(c.a) ?? 0) >= 3 || (perIssue.get(c.b) ?? 0) >= 3) continue
+      perIssue.set(c.a, (perIssue.get(c.a) ?? 0) + 1)
+      perIssue.set(c.b, (perIssue.get(c.b) ?? 0) + 1)
+      candidates.push({ ...c, strength: 0.5 })
     }
   }
 
@@ -421,6 +478,10 @@ export async function buildPlan(options: PlannerOptions): Promise<Plan> {
     for (const a of advisory) {
       if (set.has(a.before) || set.has(a.after)) rationale.push({ kind: 'advisory-order', ...a })
     }
+    for (const n of ordered) {
+      const pr = prio(n)
+      if (pr.source !== 'default') rationale.push({ kind: 'priority', issue: n, level: pr.level, source: pr.source })
+    }
     const pkg: WorkPackage = {
       id: `wp-${ordered.join('-')}`,
       issues: ordered,
@@ -429,6 +490,8 @@ export async function buildPlan(options: PlannerOptions): Promise<Plan> {
       rationale: dedupeRationale(rationale),
       size: groupSize(g),
       sizeSource: Object.fromEntries(ordered.map((n) => [String(n), sizeSource.get(n) ?? 'default'])),
+      ...packagePriority(ordered, prio),
+      unblocks: 0,
       status: 'ready',
     }
     packages.push(pkg)
@@ -460,11 +523,36 @@ export async function buildPlan(options: PlannerOptions): Promise<Plan> {
     pkgSoft.get(after)!.add(before)
   }
 
+  // How many packages (transitively) wait for each package.
+  const dependents = new Map<WorkPackage, Set<WorkPackage>>(packages.map((p) => [p, new Set()]))
+  for (const p of packages) for (const d of pkgDeps.get(p)!) dependents.get(d)!.add(p)
+  for (const p of packages) {
+    const seen = new Set<WorkPackage>()
+    const stack = [...dependents.get(p)!]
+    while (stack.length) {
+      const q = stack.pop()!
+      if (seen.has(q)) continue
+      seen.add(q)
+      stack.push(...dependents.get(q)!)
+    }
+    p.unblocks = seen.size
+    if (seen.size) p.rationale.push({ kind: 'unblocks', count: seen.size })
+  }
+
+  // Among packages that are free to go: active > pinned > importance >
+  // unblocks more > smaller (quick win) > lower issue number; deferred last.
   const pkgKey = (p: WorkPackage) => {
     const isActive = p.issues.some((n) => inProgress.has(n))
     const isPinned = p.issues.some((n) => pinned.has(n))
     const isDeferred = p.issues.every((n) => deferred.has(n))
-    return [isActive ? 0 : isPinned ? 1 : isDeferred ? 3 : 2, Math.min(...p.issues)]
+    const score = Math.max(...p.issues.map((n) => prio(n).score))
+    return [
+      isActive ? 0 : isPinned ? 1 : isDeferred ? 3 : 2,
+      -Math.round(score * 100),
+      -p.unblocks,
+      p.size,
+      Math.min(...p.issues),
+    ]
   }
   const orderedPkgs = topoSort(packages, (p) => [...pkgDeps.get(p)!, ...pkgSoft.get(p)!], pkgKey)
 
@@ -497,12 +585,13 @@ export async function buildPlan(options: PlannerOptions): Promise<Plan> {
 
   const asked = judge.usage.questions - askedBefore
   const notes: string[] = []
-  if (!judge.available) notes.push('decision model not configured: sizes default to M, bundling uses exact file overlap only')
+  if (!judge.available) notes.push('decision model not configured: sizes default to M, priority from labels only, bundling uses exact file overlap only')
   if (skippedForBudget) notes.push(`${skippedForBudget} judgment(s) skipped: maxQuestionsPerSync reached`)
   if (judge.lastError) notes.push(`last decision error: ${judge.lastError}`)
 
   return {
     schema: 1,
+    plannerVersion: PLANNER_VERSION,
     repo: options.repo,
     generatedAt: now().toISOString(),
     workPackages: orderedPkgs,
@@ -516,6 +605,18 @@ export async function buildPlan(options: PlannerOptions): Promise<Plan> {
       ...(notes.length ? { note: notes.join('; ') } : {}),
     },
   }
+}
+
+function packagePriority(
+  issues: readonly number[],
+  prio: (n: number) => { level: PriorityLevel; score: number; source: PrioritySource },
+): { priority: PriorityLevel; prioritySource: PrioritySource } {
+  let best = prio(issues[0]!)
+  for (const n of issues.slice(1)) {
+    const p = prio(n)
+    if (p.score > best.score || (p.score === best.score && best.source === 'default')) best = p
+  }
+  return { priority: best.level, prioritySource: best.source }
 }
 
 function dedupeRationale(items: Rationale[]): Rationale[] {

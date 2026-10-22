@@ -173,6 +173,7 @@ export const apply = (ctx: AnyCtx, rawConfig: Record<string, unknown> = {}) => {
         mergeThreshold: c.mergeThreshold,
         actionableThreshold: c.actionableThreshold,
         directionThreshold: c.directionThreshold,
+        similarityThreshold: c.similarityThreshold,
         maxPackageSize: c.maxPackageSize,
       }
     },

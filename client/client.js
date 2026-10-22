@@ -62,6 +62,19 @@ window.__ModuleLoader__.load({
 			"." + PREFIX + "-err{margin:8px 0;padding:6px 8px;border-radius:6px;background:var(--dsw-alias-state-warn-bg,rgba(217,119,6,.12));}",
 			"." + PREFIX + "-ok{margin:8px 0;padding:6px 8px;border-radius:6px;background:var(--dsw-alias-bg-layer-3,rgba(127,127,127,.12));}",
 			"." + PREFIX + "-mini{font-size:10px;padding:1px 5px;}",
+			"." + PREFIX + "-next{border:1.5px solid var(--dsw-alias-state-business-primary,#3b82f6);border-radius:10px;padding:10px;margin:8px 0 4px;}",
+			"." + PREFIX + "-label{font-size:10px;font-weight:700;letter-spacing:.05em;color:var(--dsw-alias-state-business-primary,#3b82f6);margin-bottom:4px;}",
+			"." + PREFIX + "-hint{margin:8px 0;padding:6px 8px;border-radius:6px;font-size:11px;line-height:1.5;background:var(--dsw-alias-state-warn-bg,rgba(217,119,6,.10));}",
+			"." + PREFIX + "-hint>div+div{margin-top:4px;}",
+			"." + PREFIX + "-size{opacity:.7;font-size:11px;}",
+			"." + PREFIX + "-badge.prio-high{background:var(--dsw-alias-state-danger-primary,#dc2626);color:#fff;}",
+			"." + PREFIX + "-badge.prio-low{opacity:.7;}",
+			"." + PREFIX + "-row{border-bottom:1px solid var(--dsw-alias-border-default,rgba(127,127,127,.18));padding:4px 0;}",
+			"." + PREFIX + "-rowhead{display:flex;align-items:center;gap:6px;}",
+			"." + PREFIX + "-rowtitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;}",
+			"." + PREFIX + "-rowbody{padding:2px 0 4px 18px;}",
+			"." + PREFIX + "-toggle{font:inherit;border:none;background:none;color:inherit;cursor:pointer;padding:0 2px;opacity:.6;}",
+			"." + PREFIX + "-why>div{margin-top:2px;}",
 		].join("\n");
 
 		var rpc = null;
@@ -85,21 +98,52 @@ window.__ModuleLoader__.load({
 			return (d.getMonth() + 1) + "/" + d.getDate() + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
 		}
 
+		var PRIO = { high: "高", medium: "中", low: "低" };
+
 		function describe(r) {
 			switch (r.kind) {
-				case "files-overlap": return "#" + r.issues[0] + " と #" + r.issues[1] + " が同じファイル（" + r.files.slice(0, 2).join(", ") + "）";
+				case "files-overlap": return "#" + r.issues[0] + " と #" + r.issues[1] + " が同じファイル（" + r.files.slice(0, 2).join(", ") + "）を触る";
 				case "area-match": return "#" + r.issues[0] + " と #" + r.issues[1] + " が同じ領域（" + r.areas.join(", ") + "）";
 				case "decision-merge": return "#" + r.issues[0] + " と #" + r.issues[1] + " は一緒に片付けるのが自然";
+				case "similar-text": return "";
 				case "hard-dependency": return "#" + r.issue + " は #" + r.dependsOn + " の後";
-				case "advisory-order": return "#" + r.before + " → #" + r.after + " の順が推奨";
-				case "pinned": return "#" + r.issue + " は優先指定";
-				case "deferred": return "#" + r.issue + " は後回し指定";
+				case "advisory-order": return "#" + r.before + " → #" + r.after + " の順がよさそう";
+				case "priority": return "#" + r.issue + " の重要度が" + PRIO[r.level] + "（" + (r.source === "label" ? "ラベル" : "判定モデル") + "）";
+				case "unblocks": return "終わると " + r.count + " 個のパッケージが着手できるようになる";
+				case "pinned": return "#" + r.issue + " を優先に指定";
+				case "deferred": return "#" + r.issue + " を後回しに指定";
 				default: return "";
 			}
 		}
 
+		function reasons(p, view) {
+			var out = [];
+			for (var i = 0; i < p.rationale.length; i++) {
+				var text = describe(p.rationale[i]);
+				if (text && out.indexOf(text) < 0) out.push(text);
+			}
+			if (p.dependsOn.length) out.push("先に " + p.dependsOn.join(", ") + " が必要");
+			if (p.blockedByExternal.length) out.push("計画外の " + p.blockedByExternal.map(function (n) { return "#" + n; }).join(" ") + " 待ち");
+			return out;
+		}
+
+		/** What the user can do to give the planner something to go on. */
+		function hints(view) {
+			var out = [];
+			var plan = view.plan;
+			if (view.decisionOff) out.push("判定モデルが止まっています（" + view.decisionOff + "）。規模・重要度・まとめ方を判定できないため、Issue 番号順で並べています。");
+			else if (plan.decision.note && /error/i.test(plan.decision.note)) out.push("判定モデルでエラーが出ています: " + plan.decision.note);
+			var s = view.signals;
+			if (s && s.open > 0 && view.decisionOff && s.withPriority === 0) {
+				out.push("重要度を示すラベル（priority:high など）が付いた Issue がありません。");
+			}
+			if (s && s.open > 0 && s.withBlock === 0) {
+				out.push(s.open + " 件すべてに dsh-plan ブロックがありません。issue-authoring スキルで書くと、規模と関係ファイルが計画に入ります。");
+			}
+			return out;
+		}
+
 		function openUrl(event, url) {
-			// Let the host/sidebar claim links when it can; otherwise a new window.
 			if (!url) return;
 			event.preventDefault();
 			try { window.open(url, "_blank", "noopener"); } catch (e) { /* ignore */ }
@@ -127,32 +171,60 @@ window.__ModuleLoader__.load({
 				}, "後回し"));
 		}
 
-		function Package(props) {
+		function StartButton(props) {
 			var p = props.pkg;
+			if (p.status !== "ready" && p.status !== "in_progress") return null;
+			return h("button", {
+				className: PREFIX + "-btn" + (props.primary ? " primary" : ""),
+				disabled: props.busy || !props.view.canKickoff,
+				title: props.view.canKickoff ? "このパッケージをエージェントに渡す（/issues next " + p.id + "）" : "このセッションのエージェントが見つかりません",
+				onClick: function () { props.act("next", { packageId: p.id }); },
+			}, p.status === "in_progress" ? "続ける" : (props.primary ? "これに着手" : "着手"));
+		}
+
+		function Badges(p) {
 			var st = STATUS[p.status] || { label: p.status, cls: "" };
-			var isNext = props.view.nextId === p.id;
-			var canStart = p.status === "ready" || p.status === "in_progress";
-			var why = [];
-			for (var i = 0; i < p.rationale.length && why.length < 2; i++) {
-				var text = describe(p.rationale[i]);
-				if (text) why.push(text);
+			var out = [h("span", { key: "s", className: PREFIX + "-badge " + st.cls }, st.label)];
+			if (p.prioritySource && p.prioritySource !== "default") {
+				out.push(h("span", { key: "p", className: PREFIX + "-badge prio-" + p.priority, title: p.prioritySource === "label" ? "ラベルから" : "判定モデルの推定" }, "重要度 " + PRIO[p.priority]));
 			}
-			if (p.dependsOn.length) why.push("先に " + p.dependsOn.join(", "));
-			if (p.blockedByExternal.length) why.push("外部ブロッカー " + p.blockedByExternal.map(function (n) { return "#" + n; }).join(" "));
-			return h("div", { className: PREFIX + "-pkg" + (isNext ? " next" : "") },
+			out.push(h("span", { key: "z", className: PREFIX + "-size", title: "S=1 M=2 L=4" }, "規模 " + p.size));
+			return out;
+		}
+
+		/** The recommended package, shown large with its reasons. */
+		function NextCard(props) {
+			var p = props.pkg;
+			var why = reasons(p, props.view);
+			return h("div", { className: PREFIX + "-next" },
+				h("div", { className: PREFIX + "-label" }, p.status === "in_progress" ? "作業中" : "次はこれ"),
 				h("div", { className: PREFIX + "-pkghead" },
 					h("span", { className: PREFIX + "-pkgid" }, p.id),
-					h("span", { className: PREFIX + "-badge " + st.cls }, st.label),
-					h("span", { title: "S=1 M=2 L=4" }, "規模 " + p.size),
+					Badges(p),
 					h("span", { className: PREFIX + "-spacer" }),
-					canStart ? h("button", {
-						className: PREFIX + "-btn" + (isNext ? " primary" : ""),
-						disabled: props.busy || !props.view.canKickoff,
-						title: props.view.canKickoff ? "このパッケージをエージェントに渡す（/issues next " + p.id + "）" : "このセッションのエージェントが見つかりません",
-						onClick: function () { props.act("next", { packageId: p.id }); },
-					}, p.status === "in_progress" ? "続ける" : "これに着手") : null),
+					h(StartButton, { pkg: p, view: props.view, busy: props.busy, act: props.act, primary: true })),
 				p.issues.map(function (n) { return h(IssueRow, { key: n, n: n, view: props.view, busy: props.busy, act: props.act }); }),
-				why.length ? h("div", { className: PREFIX + "-why" }, why.join(" / ")) : null);
+				h("div", { className: PREFIX + "-why" },
+					why.length ? why.map(function (w, i) { return h("div", { key: i }, "・" + w); })
+						: "選んだ理由: ほかに決め手がないので、Issue 番号のいちばん小さいものです。"));
+		}
+
+		/** Other packages: one compact row each, expandable. */
+		function PackageRow(props) {
+			var p = props.pkg;
+			var op = react.useState(false), open = op[0], setOpen = op[1];
+			var first = props.view.issues[String(p.issues[0])];
+			var label = "#" + p.issues.join(" #") + (first ? " " + first.title : "");
+			return h("div", { className: PREFIX + "-row" },
+				h("div", { className: PREFIX + "-rowhead" },
+					h("button", { className: PREFIX + "-toggle", onClick: function () { setOpen(!open); }, title: open ? "たたむ" : "詳しく" }, open ? "▾" : "▸"),
+					h("span", { className: PREFIX + "-rowtitle", title: label, onClick: function () { setOpen(!open); } }, label),
+					Badges(p),
+					h(StartButton, { pkg: p, view: props.view, busy: props.busy, act: props.act, primary: false })),
+				open ? h("div", { className: PREFIX + "-rowbody" },
+					p.issues.map(function (n) { return h(IssueRow, { key: n, n: n, view: props.view, busy: props.busy, act: props.act }); }),
+					(function () { var w = reasons(p, props.view); return w.length ? h("div", { className: PREFIX + "-why" }, w.join(" / ")) : null; })())
+					: null);
 		}
 
 		function PlanTab(props) {
@@ -205,12 +277,23 @@ window.__ModuleLoader__.load({
 						" ",
 						h("button", { className: PREFIX + "-btn " + PREFIX + "-mini", disabled: busy, onClick: function () { run("done"); } }, "作業中を解除")));
 				}
+				var tips = hints(view);
+				if (tips.length) {
+					children.push(h("div", { key: "hints", className: PREFIX + "-hint" },
+						tips.map(function (x, i) { return h("div", { key: i }, x); })));
+				}
+				var next = null;
+				for (var i = 0; i < plan.workPackages.length; i++) if (plan.workPackages[i].id === view.nextId) next = plan.workPackages[i];
 				if (!plan.workPackages.length) children.push(h("div", { key: "empty", className: PREFIX + "-meta" }, "計画に入る Issue はありません。"));
-				plan.workPackages.forEach(function (p) {
-					children.push(h(Package, { key: p.id, pkg: p, view: view, busy: busy, act: run }));
-				});
+				else if (!next) children.push(h("div", { key: "nonext", className: PREFIX + "-ok" }, "いま着手できるパッケージはありません（すべて先行待ちかブロック中）。"));
+				if (next) children.push(h(NextCard, { key: "next", pkg: next, view: view, busy: busy, act: run }));
+				var rest = plan.workPackages.filter(function (p) { return p !== next; });
+				if (rest.length) {
+					children.push(h("div", { key: "resth", className: PREFIX + "-section" }, "そのあと（" + rest.length + "）"));
+					rest.forEach(function (p) { children.push(h(PackageRow, { key: p.id, pkg: p, view: view, busy: busy, act: run })); });
+				}
 				if (plan.needsHuman.length) {
-					children.push(h("div", { key: "nh", className: PREFIX + "-section" }, "人の判断が必要"));
+					children.push(h("div", { key: "nh", className: PREFIX + "-section" }, "人の判断が必要（" + plan.needsHuman.length + "）"));
 					plan.needsHuman.forEach(function (x) {
 						var reason = x.reason === "dependency-cycle" ? "依存が循環" : "内容が不明確";
 						children.push(h("div", { key: "nh" + x.issue },

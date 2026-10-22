@@ -5,6 +5,7 @@
  */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { PLANNER_VERSION } from './plan/planner.js'
 import { createJudge, type Judge, type JudgmentStore } from './decision/judge.js'
 import type { DecisionClient } from './decision/client.js'
 import type { FetchedIssue, GitHubIssueSource } from './github/adapter.js'
@@ -25,6 +26,7 @@ export interface SyncSettings {
   mergeThreshold: number
   actionableThreshold: number
   directionThreshold: number
+  similarityThreshold?: number
   maxPackageSize: number
 }
 
@@ -151,6 +153,7 @@ export class SyncService {
       mergeThreshold: settings.mergeThreshold,
       actionableThreshold: settings.actionableThreshold,
       directionThreshold: settings.directionThreshold,
+      ...(settings.similarityThreshold !== undefined ? { similarityThreshold: settings.similarityThreshold } : {}),
       maxPackageSize: settings.maxPackageSize,
       maxQuestions: settings.maxQuestionsPerSync,
       now: this.now,
@@ -228,7 +231,8 @@ export class SyncService {
     state.lastSyncError = null
     collectAreas(state)
 
-    const unchanged = !changed.length && !closed.length && state.plan !== null && !options.full
+    const stalePlan = state.plan !== null && state.plan.plannerVersion !== PLANNER_VERSION
+    const unchanged = !changed.length && !closed.length && state.plan !== null && !options.full && !stalePlan
     const plan = unchanged ? state.plan! : await this.replan(state, options.signal, closed)
     await store.save(state)
     logger.info('sync complete', {

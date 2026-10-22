@@ -1,14 +1,15 @@
 /**
- * The only three things the decision model is asked (design §5.3):
+ * The only four things the decision model is asked (design §5.3):
  * 1. size + actionable — for issues without a valid dsh-plan block
- * 2. merge             — for candidate pairs the code already found
- * 3. direction         — for pairs that mention each other
+ * 2. priority          — for issues without a priority label
+ * 3. merge             — for candidate pairs the code already found
+ * 4. direction         — for pairs that mention each other
  *
  * Every answer is cached under a hash of exactly the inputs it saw, so an
  * unchanged issue is never re-asked (judge only on diff).
  */
 import { createHash } from 'node:crypto'
-import type { DirectionJudgment, IssueRecord, IssueSize, MergeJudgment, SizeJudgment, UsageTotals } from '../types.js'
+import type { DirectionJudgment, IssueRecord, IssueSize, MergeJudgment, PriorityJudgment, PriorityLevel, SizeJudgment, UsageTotals } from '../types.js'
 import type { DecisionAnswer, DecisionClient, DecisionQuestion } from './client.js'
 
 /** Bump when question wording changes so cached answers are re-asked. */
@@ -24,6 +25,7 @@ export interface Judge {
   readonly available: boolean
   readonly provider: string
   size(issue: IssueRecord, signal?: AbortSignal): Promise<SizeJudgment | null>
+  priority(issue: IssueRecord, signal?: AbortSignal): Promise<PriorityJudgment | null>
   merge(a: IssueRecord, b: IssueRecord, signal?: AbortSignal): Promise<MergeJudgment | null>
   direction(a: IssueRecord, b: IssueRecord, signal?: AbortSignal): Promise<DirectionJudgment | null>
   /** Questions actually sent (cache misses) since construction. */
@@ -66,6 +68,18 @@ const ACTIONABLE_Q: DecisionQuestion = {
   },
 }
 
+const PRIORITY_Q: DecisionQuestion = {
+  type: 'score',
+  instructions:
+    'How important is it for the project to resolve this GitHub issue soon, compared with typical issues in the same repository? ' +
+    'Consider user impact, broken or risky behaviour, and whether other work waits for it.',
+  criteria: [
+    'low: nice to have, polish, or speculative idea; nothing is broken without it',
+    'medium: a real improvement or a minor bug that users would notice',
+    'high: a bug, data loss, security or blocking problem, or a core feature users need now',
+  ],
+}
+
 const MERGE_Q: DecisionQuestion = {
   type: 'noul',
   instructions:
@@ -90,6 +104,12 @@ const DIRECTION_Q: DecisionQuestion = {
 function scoreToSize(answer: DecisionAnswer | undefined): IssueSize | null {
   if (!answer || answer.type !== 'score' || !Number.isFinite(answer.score)) return null
   return answer.score < 0.5 ? 'S' : answer.score < 1.5 ? 'M' : 'L'
+}
+
+function scoreToPriority(answer: DecisionAnswer | undefined): PriorityJudgment | null {
+  if (!answer || answer.type !== 'score' || !Number.isFinite(answer.score)) return null
+  const level: PriorityLevel = answer.score < 0.67 ? 'low' : answer.score < 1.34 ? 'medium' : 'high'
+  return { level, score: answer.score }
 }
 
 function noulValue(answer: DecisionAnswer | undefined): number | null {
@@ -150,6 +170,14 @@ export function createJudge(client: DecisionClient | null, store: JudgmentStore,
         const actionable = noulValue(answers.actionable)
         if (!size || actionable === null) return null
         return { size, actionable } satisfies SizeJudgment
+      })
+    },
+
+    priority(issue, signal) {
+      const state = issueState(issue)
+      return cached(`priority:${QUESTION_VERSION}:${scope}:${issue.number}:${hash(state)}`, async () => {
+        const answers = await ask(state, { priority: PRIORITY_Q }, signal)
+        return scoreToPriority(answers?.priority)
       })
     },
 

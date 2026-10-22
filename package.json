@@ -1,6 +1,6 @@
 {
   "name": "dsh-issue-priority",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Background GitHub Issue planning for DeepSeek Harness: bundles issues into session-sized work packages and orders them, using deterministic rules plus the LiquidAI d1 decision model (no LLM in the background).",
   "keywords": [
     "dsh-plugin",

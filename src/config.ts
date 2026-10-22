@@ -12,6 +12,7 @@ export interface PluginConfig {
   mergeThreshold?: number
   actionableThreshold?: number
   directionThreshold?: number
+  similarityThreshold?: number
   maxPackageSize?: number
   syncIntervalMinutes?: number
   maxIssues?: number
@@ -53,6 +54,7 @@ export const Config = Schema.object({
   mergeThreshold: Schema.number().min(0).max(1).default(0.6).description('Merge noul ≥ this → same package.').volatile(),
   actionableThreshold: Schema.number().min(0).max(1).default(0.35).description('Actionable noul below this → needsHuman (unclear).').volatile(),
   directionThreshold: Schema.number().min(0).max(1).default(0.6).description('Direction choice probability needed for an advisory order.').volatile(),
+  similarityThreshold: Schema.number().min(0).max(1).default(0.1).description('Text similarity (bigram Jaccard) for two issues without dsh-plan blocks to be asked whether they belong together.').volatile(),
   maxPackageSize: Schema.natural().min(1).max(16).default(4).description('Max package size (S=1, M=2, L=4).').volatile(),
   syncIntervalMinutes: Schema.natural().min(0).max(1440).default(60).description('Background sync interval; 0 disables the timer.'),
   maxIssues: Schema.natural().min(1).max(5000).default(300).description('Max open issues fetched per sync (most recently updated first). Raise for large backlogs; more issues = more GitHub requests and more decision questions on the first sync.').volatile(),
@@ -76,6 +78,7 @@ export const DEFAULTS: ResolvedConfig = {
   mergeThreshold: 0.6,
   actionableThreshold: 0.35,
   directionThreshold: 0.6,
+  similarityThreshold: 0.1,
   maxPackageSize: 4,
   syncIntervalMinutes: 60,
   maxIssues: 300,

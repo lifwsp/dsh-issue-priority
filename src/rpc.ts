@@ -54,6 +54,10 @@ export interface PlanView {
   inProgress: { issues: number[]; branch?: string | null } | null
   usage: { questions: number; inputTokens: number }
   canKickoff: boolean
+  /** Why the decision model is off (user-facing), when it is. */
+  decisionOff: string | null
+  /** How much the planner had to go on (to explain a flat plan). */
+  signals: { open: number; withBlock: number; withPriority: number }
 }
 
 function str(v: unknown): string | undefined {
@@ -74,7 +78,7 @@ function findAgent(deps: RpcDeps, sessionId: string | undefined): AgentLike | un
   return undefined
 }
 
-function view(state: RepoState, plan: Plan, agent: AgentLike | undefined): PlanView {
+function view(state: RepoState, plan: Plan, agent: AgentLike | undefined, decisionOff: string | undefined): PlanView {
   const issues: PlanView['issues'] = {}
   const wanted = new Set<number>()
   for (const p of plan.workPackages) for (const n of p.issues) wanted.add(n)
@@ -97,7 +101,18 @@ function view(state: RepoState, plan: Plan, agent: AgentLike | undefined): PlanV
     inProgress: state.inProgress ? { issues: state.inProgress.issues, branch: state.inProgress.branch ?? null } : null,
     usage: { questions: state.usage.questions, inputTokens: state.usage.inputTokens },
     canKickoff: typeof agent?.followup === 'function',
+    decisionOff: decisionOff ?? null,
+    signals: signalCounts(state, plan),
   }
+}
+
+function signalCounts(state: RepoState, plan: Plan): PlanView['signals'] {
+  const open = Object.values(state.issues).filter((i) => i.state === 'open')
+  const prioritized = new Set<number>()
+  for (const p of plan.workPackages) {
+    for (const r of p.rationale) if (r.kind === 'priority') prioritized.add(r.issue)
+  }
+  return { open: open.length, withBlock: open.filter((i) => i.block).length, withPriority: prioritized.size }
 }
 
 function fail(code: string, message: string): RpcResult {
@@ -106,6 +121,13 @@ function fail(code: string, message: string): RpcResult {
 
 export function createRpcHandler(deps: RpcDeps) {
   const { runtime } = deps
+  const off = async (): Promise<string | undefined> => {
+    try {
+      return await runtime.deps.decisionStatus()
+    } catch {
+      return undefined
+    }
+  }
 
   async function resolve(p: Payload): Promise<{ repo: string; agent: AgentLike | undefined }> {
     const agent = findAgent(deps, str(p.sessionId))
@@ -121,12 +143,12 @@ export function createRpcHandler(deps: RpcDeps) {
     async plan(p, signal) {
       const { repo, agent } = await resolve(p)
       const { state, plan } = await runtime.ensurePlan(repo, { signal })
-      return view(state, plan, agent)
+      return view(state, plan, agent, await off())
     },
     async sync(p, signal) {
       const { repo, agent } = await resolve(p)
       const res = await runtime.deps.sync.sync(repo, { full: p.full === true, signal })
-      return { ...view(res.state, res.plan, agent), synced: { fetched: res.fetched, changed: res.changed.length, closed: res.closed.length, unchanged: res.unchanged } }
+      return { ...view(res.state, res.plan, agent, await off()), synced: { fetched: res.fetched, changed: res.changed.length, closed: res.closed.length, unchanged: res.unchanged } }
     },
     async override(p, signal) {
       const { repo, agent } = await resolve(p)
@@ -135,12 +157,12 @@ export function createRpcHandler(deps: RpcDeps) {
       if (!Number.isInteger(issue) || issue <= 0) throw new RpcError('bad-request', 'issue must be a positive integer')
       if (action !== 'defer' && action !== 'pin' && action !== 'clear') throw new RpcError('bad-request', 'action must be defer | pin | clear')
       const { state, plan } = await runtime.mutate(repo, (s) => runtime.setOverride(s, issue, action), signal)
-      return view(state, plan, agent)
+      return view(state, plan, agent, await off())
     },
     async done(p, signal) {
       const { repo, agent } = await resolve(p)
       const { state, plan } = await runtime.mutate(repo, (s) => runtime.setInProgress(s, null), signal)
-      return view(state, plan, agent)
+      return view(state, plan, agent, await off())
     },
     async next(p, signal) {
       const { repo, agent } = await resolve(p)

@@ -10,6 +10,8 @@ const STATUS_LABEL: Record<WorkPackage['status'], string> = {
   in_progress: '作業中',
 }
 
+export const PRIORITY_LABEL = { high: '高', medium: '中', low: '低' } as const
+
 function issueLabel(issues: Record<string, IssueRecord>, n: number): string {
   const i = issues[String(n)]
   return i ? `#${n} ${i.title}` : `#${n}`
@@ -27,6 +29,12 @@ export function describeRationale(r: Rationale): string {
       return `#${r.issue} は #${r.dependsOn} の後 (${r.source})`
     case 'advisory-order':
       return `#${r.before} → #${r.after} の順が推奨 (推定 p=${r.p.toFixed(2)})`
+    case 'similar-text':
+      return `#${r.issues[0]} と #${r.issues[1]} の内容が近い (類似度 ${r.similarity.toFixed(2)})`
+    case 'priority':
+      return `#${r.issue} の重要度は${PRIORITY_LABEL[r.level]} (${r.source === 'label' ? 'ラベル' : '判定モデル'})`
+    case 'unblocks':
+      return `終わると ${r.count} 個のパッケージが着手可能になる`
     case 'pinned':
       return `#${r.issue} は pin 指定`
     case 'deferred':
@@ -44,7 +52,8 @@ export function nextPackage(plan: Plan): WorkPackage | null {
 }
 
 export function renderPackage(pkg: WorkPackage, issues: Record<string, IssueRecord>, index?: number): string[] {
-  const head = `${index != null ? `${index + 1}. ` : ''}[${STATUS_LABEL[pkg.status]}] ${pkg.id} (規模 ${pkg.size})`
+  const prio = pkg.prioritySource === 'default' ? '' : ` 重要度 ${PRIORITY_LABEL[pkg.priority]}`
+  const head = `${index != null ? `${index + 1}. ` : ''}[${STATUS_LABEL[pkg.status]}] ${pkg.id} (規模 ${pkg.size}${prio})`
   const lines = [head]
   for (const n of pkg.issues) lines.push(`   - ${issueLabel(issues, n)}`)
   if (pkg.dependsOn.length) lines.push(`   先に: ${pkg.dependsOn.join(', ')}`)

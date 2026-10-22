@@ -6,6 +6,7 @@ import { resolveRepo } from './github/rest-adapter.js'
 import type { Logger } from './log.js'
 import type { RepoState, StateStore } from './store.js'
 import { currentBranch, detectRepo, type SyncResult, type SyncService } from './sync.js'
+import { PLANNER_VERSION } from './plan/planner.js'
 import type { Plan } from './types.js'
 
 export interface RuntimeDeps {
@@ -57,7 +58,8 @@ export class IssuePlanRuntime {
   async ensurePlan(repo: string, options: { maxAgeMs?: number; force?: boolean; signal?: AbortSignal } = {}): Promise<{ state: RepoState; plan: Plan; synced: SyncResult | null }> {
     const state = await this.deps.store.load(repo)
     const age = state.lastSyncAt ? this.now().getTime() - Date.parse(state.lastSyncAt) : Infinity
-    if (options.force || !state.plan || age > (options.maxAgeMs ?? 5 * 60_000)) {
+    const stale = state.plan !== null && state.plan.plannerVersion !== PLANNER_VERSION
+    if (options.force || !state.plan || stale || age > (options.maxAgeMs ?? 5 * 60_000)) {
       try {
         const res = await this.deps.sync.sync(repo, { signal: options.signal })
         return { state: res.state, plan: res.plan, synced: res }

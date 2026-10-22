@@ -18,7 +18,11 @@ describe('toIssueRecord', () => {
 describe('SyncService', () => {
   it('syncs incrementally and only judges changed issues', async () => {
     const gh = new FakeGitHub([fetched(1), fetched(2, { updatedAt: '2026-10-02T00:00:00Z' })])
-    const client = new FakeDecision((qid) => (qid === 'size' ? { type: 'score', score: 1, probabilities: {} } : { type: 'noul', noul: 0.9 }))
+    const client = new FakeDecision((qid) =>
+      qid === 'size' || qid === 'priority'
+        ? { type: 'score', score: 1, probabilities: {} }
+        : { type: 'noul', noul: qid === 'merge' ? 0.1 : 0.9 },
+    )
     const store = createMemoryStore()
     const svc = new SyncService({ github: () => gh, decision: () => client, store, logger: silentLogger, settings })
 
@@ -26,7 +30,8 @@ describe('SyncService', () => {
     expect(first.fetched).toBe(2)
     expect(first.plan.workPackages).toHaveLength(2)
     const asked = client.requests.length
-    expect(asked).toBe(2)
+    // size+actionable and priority per issue, plus one merge question for the similar pair.
+    expect(asked).toBe(5)
 
     // Nothing changed upstream → no judging, plan reused.
     const second = await svc.sync('o/r')
@@ -43,7 +48,8 @@ describe('SyncService', () => {
     const third = await svc.sync('o/r')
     expect(third.closed).toEqual([1])
     expect(third.changed).toEqual([3])
-    expect(client.requests.length).toBe(asked + 1)
+    // Only #3 is new: its size, its priority, and the #2–#3 merge question.
+    expect(client.requests.length).toBe(asked + 3)
     expect(third.plan.changesSinceLast.closed).toEqual([1])
     expect(third.plan.changesSinceLast.new).toEqual([3])
   })

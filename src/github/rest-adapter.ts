@@ -1,7 +1,7 @@
 import { GitHubAdapterError, type FetchedIssue, type GitHubIssueSource, type ListIssuesSinceOptions } from './adapter.js'
 
 const DEFAULT_API_BASE = 'https://api.github.com'
-const USER_AGENT = 'dsh-issue-priority/0.3.0'
+const USER_AGENT = 'dsh-issue-priority/0.4.0'
 const RETRYABLE = new Set([403, 429])
 
 export interface RestGitHubAdapterOptions {

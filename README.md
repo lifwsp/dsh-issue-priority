@@ -23,6 +23,8 @@ DeepSeek Harness（DSH）向けプラグイン。溜まった GitHub Issue を�
 
 [dsh-better-sidebar](https://www.npmjs.com/package/dsh-better-sidebar) が入っていれば、右サイドバーの「+」から **Issue 計画** タブを開けます。コマンドを覚えなくても、ボタンで次の操作ができます。
 
+いちばん上に **「次はこれ」** のパッケージを 1 つだけ大きく出し、選んだ理由を添えます。残りは「そのあと」に 1 行ずつ並び、▸ で開けます。並べ分ける材料が足りないとき（判定モデルが止まっている、dsh-plan ブロックがない、など）は、その旨と直し方を上に出します。
+
 - **同期**: GitHub と今すぐ同期します。
 - **これに着手 / 続ける**: そのパッケージを、このセッションのエージェントに渡します。`/issues next ID` と同じです。
 - **優先 / 後回し**: Issue ごとに切り替えます。もう一度押すと解除します。
@@ -59,6 +61,18 @@ acceptance: ログイン画面でエラーが表示される
 
 `issue_draft` が作るので手で書く必要はありません。ブロックのない Issue も計画に入ります（規模は d1 が推定、なければ M とみなす）。
 
+## 並び順
+
+依存関係（GitHub の Issue 依存 > dsh-plan の `dependsOn` > 本文の `blocked by #N`）を守ったうえで、同時に着手できるものは次の順に並べます。
+
+1. 作業中 > 優先 > 通常 > 後回し
+2. 重要度（`priority:high` などのラベル。なければ d1 が low / medium / high を推定）
+3. 終わると着手できるようになるパッケージが多いもの
+4. 規模が小さいもの
+5. Issue 番号が小さいもの
+
+ブロックのない Issue どうしでも、タイトルや本文が近ければ、d1 に「一緒に片付けるべきか」を聞いてまとめます。
+
 ## 設定
 
 | キー | 既定 | 説明 |
@@ -72,6 +86,7 @@ acceptance: ログイン画面でエラーが表示される
 | `maxIssues` | `300` | 1 回の同期で読む Open Issue の上限（更新が新しい順、最大 5000） |
 | `maxQuestionsPerSync` | `200` | 1 回の同期で d1 に聞く上限 |
 | `mergeThreshold` / `actionableThreshold` / `directionThreshold` | `0.6` / `0.35` / `0.6` | 判定のしきい値 |
+| `similarityThreshold` | `0.1` | ブロックのない Issue どうしを「まとめ候補」にする文章の近さ（0〜1） |
 | `maxPackageSize` | `4` | パッケージの規模上限（S=1, M=2, L=4） |
 | `githubTokenRef` | `GITHUB_TOKEN` | なければ `GH_TOKEN`、`gh auth token` の順 |
 | `dataDir` | `''` | 空なら `$DSH_HOME/data/dsh-issue-priority` |

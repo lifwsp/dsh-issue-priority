@@ -47,8 +47,16 @@ export type Rationale =
   | { kind: 'decision-merge'; issues: [number, number]; p: number }
   | { kind: 'hard-dependency'; issue: number; dependsOn: number; source: DependencySource }
   | { kind: 'advisory-order'; before: number; after: number; p: number }
+  | { kind: 'similar-text'; issues: [number, number]; similarity: number }
+  | { kind: 'priority'; issue: number; level: PriorityLevel; source: PrioritySource }
+  | { kind: 'unblocks'; count: number }
   | { kind: 'pinned'; issue: number }
   | { kind: 'deferred'; issue: number }
+
+/** Importance of an issue: low / medium / high. */
+export type PriorityLevel = 'low' | 'medium' | 'high'
+export const PRIORITY_RANK: Record<PriorityLevel, number> = { low: 0, medium: 1, high: 2 }
+export type PrioritySource = 'label' | 'decision' | 'default'
 
 export interface WorkPackage {
   id: string
@@ -63,6 +71,12 @@ export interface WorkPackage {
   size: number
   /** Where each issue's size came from, keyed by issue number. */
   sizeSource: Record<string, 'block' | 'decision' | 'default'>
+  /** Highest priority among the package's issues. */
+  priority: PriorityLevel
+  /** Where that priority came from ('default' = nothing to go on). */
+  prioritySource: PrioritySource
+  /** Number of other packages that (transitively) wait for this one. */
+  unblocks: number
   status: PackageStatus
 }
 
@@ -101,6 +115,8 @@ export interface ChangesSinceLast {
 
 export interface Plan {
   schema: 1
+  /** Planner logic version; a mismatch forces a rebuild on the next sync. */
+  plannerVersion?: number
   repo: string
   generatedAt: string
   /** Ordered: first `ready` entry is the recommended next package. */
@@ -122,6 +138,12 @@ export interface SizeJudgment {
   size: IssueSize
   /** Probability the issue is actionable as written. */
   actionable: number
+}
+
+export interface PriorityJudgment {
+  level: PriorityLevel
+  /** Expected rank 0..2 (low..high), for finer tie-breaking. */
+  score: number
 }
 
 export interface MergeJudgment {
