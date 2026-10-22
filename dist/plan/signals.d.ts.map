@@ -1,0 +1,1 @@
+{"version":3,"file":"signals.d.ts","sourceRoot":"","sources":["../../src/plan/signals.ts"],"names":[],"mappings":"AAAA,qEAAqE;AACrE,OAAO,KAAK,EAAE,WAAW,EAAE,aAAa,EAAE,MAAM,aAAa,CAAA;AAM7D;;;GAGG;AACH,wBAAgB,aAAa,CAAC,MAAM,EAAE,SAAS,MAAM,EAAE,GAAG,aAAa,GAAG,IAAI,CAoB7E;AAeD,yFAAyF;AACzF,wBAAgB,cAAc,CAAC,CAAC,EAAE,WAAW,EAAE,CAAC,EAAE,WAAW,GAAG,MAAM,CAOrE"}
