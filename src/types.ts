@@ -127,6 +127,8 @@ export interface Plan {
   changesSinceLast: ChangesSinceLast
   decision: {
     provider: string
+    /** Model id (e.g. liquid/d1-20260930); provider is only the route. */
+    model?: string
     available: boolean
     /** Decision questions asked during the sync that produced this plan. */
     asked: number

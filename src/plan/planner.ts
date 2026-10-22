@@ -584,6 +584,14 @@ export async function buildPlan(options: PlannerOptions): Promise<Plan> {
   }
 
   const asked = judge.usage.questions - askedBefore
+  // The API reports the dated model id (liquid/d1-20260930) only when asked; on a
+  // fully cached run keep the id the previous plan recorded for the same route.
+  const prevDecision = options.previous?.decision
+  const decisionModel = !judge.available
+    ? undefined
+    : asked === 0 && prevDecision?.provider === judge.provider && prevDecision.model
+      ? prevDecision.model
+      : judge.model
   const notes: string[] = []
   if (!judge.available) notes.push('decision model not configured: sizes default to M, priority from labels only, bundling uses exact file overlap only')
   if (skippedForBudget) notes.push(`${skippedForBudget} judgment(s) skipped: maxQuestionsPerSync reached`)
@@ -600,6 +608,7 @@ export async function buildPlan(options: PlannerOptions): Promise<Plan> {
     changesSinceLast,
     decision: {
       provider: judge.provider,
+      ...(decisionModel ? { model: decisionModel } : {}),
       available: judge.available,
       asked,
       ...(notes.length ? { note: notes.join('; ') } : {}),

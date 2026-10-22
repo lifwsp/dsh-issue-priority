@@ -2,8 +2,8 @@
 export const ISSUE_AUTHORING_SKILL = {
   name: 'issue-authoring',
   description:
-    'GitHub Issue を書く・直すときの手順。人間向け本文に加え、計画用の <!-- dsh-plan --> ブロックを issue_draft ツールで必ず付ける。',
-  whenToUse: 'Issue を新規作成・起票・編集・分割するとき、またはバグ報告や要望を Issue 化するとき。',
+    'GitHub Issue を書く・起票する・直すときは必ずこの手順。ユーザーが計画ブロックに触れなくても、計画用の <!-- dsh-plan --> ブロックを issue_draft ツールで付ける。',
+  whenToUse: '「Issue 起票して」「Issue にしておいて」「バグとして登録して」など、Issue を新規作成・起票・編集・分割するとき。gh issue create を使う前。',
   content: `# Issue authoring (dsh-issue-priority)
 
 Issue を作る/直すときは、本文の末尾に機械可読の計画ブロックを付けます。
@@ -23,6 +23,8 @@ Issue を「同じセッションで片付ける単位（作業パッケージ�
    ブロックを手で書き換えない。エラーが返ったら直して再度 issue_draft を呼ぶ。
 
 ## 注意
+
+- ユーザーはこのブロックの書式を知らなくてよい。areas / size / files は会話とコードから推定して埋め、推定した値を起票後に一行で伝える（例: 「規模 M、領域 ui、依存 #5 として登録しました」）。確認のために作業を止めない。
 
 - ブロックが壊れていると、その Issue は「ブロックなし」として扱われます（警告に出ます）。
 - 依存は GitHub の Issue dependencies（blocked by）でも登録できます。両方あれば GitHub 側が優先されます。

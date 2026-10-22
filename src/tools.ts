@@ -20,7 +20,8 @@ export function createIssueDraftTool(runtime: IssuePlanRuntime) {
     name: 'issue_draft',
     description:
       'Validate and render the machine-readable `<!-- dsh-plan -->` block for a GitHub Issue body. ' +
-      'Use whenever you write or edit an Issue so the planner can bundle and order it. ' +
+      'ALWAYS call this before creating or editing any GitHub Issue (gh issue create/edit, GitHub API, MCP, etc.), ' +
+      'even when the user just says "Issue 起票して" / "file an issue" without mentioning the plan block. ' +
       'Returns the final body (block appended/replaced) plus the known `areas` vocabulary — reuse those names. ' +
       'Does NOT create the Issue; post the returned body yourself (e.g. `gh issue create --body-file`).',
     parameters: {

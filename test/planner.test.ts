@@ -172,4 +172,22 @@ describe('buildPlan', () => {
     expect(plan.workPackages).toHaveLength(1)
     expect(plan.workPackages[0]?.rationale.some((r) => r.kind === 'similar-text')).toBe(true)
   })
+
+  it('records the model that answered, not just the route, and keeps it on cached runs', async () => {
+    const judgments = new Map<string, unknown>()
+    const store = { get: (k: string) => judgments.get(k), set: (k: string, v: unknown) => judgments.set(k, v) }
+    const client = Object.assign(
+      new FakeDecision((qid) => (qid === 'actionable' ? { type: 'noul', noul: 0.9 } : { type: 'score', score: 1 })),
+      { provider: 'openrouter', model: 'liquid/d1' },
+    )
+    client.ask = (orig => async (req: Parameters<typeof orig>[0]) => ({ ...(await orig(req)), model: 'liquid/d1-20260930' }))(client.ask.bind(client))
+    const first = await buildPlan(base({ issues: [rec(1)], judge: createJudge(client, store) }))
+    expect(first.decision).toMatchObject({ provider: 'openrouter', model: 'liquid/d1-20260930' })
+    const second = await buildPlan(base({ issues: [rec(1)], judge: createJudge(client, store), previous: first }))
+    expect(second.decision.asked).toBe(0)
+    expect(second.decision.model).toBe('liquid/d1-20260930')
+    const off = await buildPlan(base({ issues: [rec(1)], previous: first }))
+    expect(off.decision.model).toBeUndefined()
+  })
 })
+

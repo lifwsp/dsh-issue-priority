@@ -311,7 +311,7 @@ window.__ModuleLoader__.load({
 
 			var meta = view
 				? "最終同期 " + fmtTime(view.lastSyncAt) +
-					" · 判定モデル " + (plan.decision.available ? plan.decision.provider : "なし") +
+					" · 判定モデル " + (plan.decision.available ? (plan.decision.model || plan.decision.provider) : "なし") +
 					" · 累計 " + view.usage.questions + " 問" +
 					(view.lastSyncError ? " · 同期エラー: " + view.lastSyncError : "")
 				: "";
@@ -320,7 +320,7 @@ window.__ModuleLoader__.load({
 				h("div", { className: PREFIX + "-head" },
 					h("span", { className: PREFIX + "-repo", title: view ? view.repo : "" }, view ? view.repo : "Issue 計画"),
 					h("button", { className: PREFIX + "-btn", disabled: busy, title: "GitHub と今すぐ同期", onClick: function () { run("sync"); } }, busy ? "…" : "同期")),
-				meta ? h("div", { className: PREFIX + "-meta", title: plan && plan.decision.note ? plan.decision.note : "" }, meta) : null,
+				meta ? h("div", { className: PREFIX + "-meta", title: plan ? [plan.decision.available ? "経由: " + plan.decision.provider : "", plan.decision.note || ""].filter(Boolean).join("\n") : "" }, meta) : null,
 				h("div", { className: PREFIX + "-body" }, children));
 		}
 

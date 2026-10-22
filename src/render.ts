@@ -93,7 +93,7 @@ export function renderPlan(state: RepoState, plan: Plan, options: { limit?: numb
   const d = plan.decision
   lines.push(
     '',
-    `判定モデル: ${d.available ? d.provider : 'なし（決定的ルールのみ）'}・今回の質問 ${d.asked} 件` +
+    `判定モデル: ${d.available ? (d.model ? `${d.model}（${d.provider} 経由）` : d.provider) : 'なし（決定的ルールのみ）'}・今回の質問 ${d.asked} 件` +
       ` / 累計 ${state.usage.questions} 件・約 ${state.usage.inputTokens} 入力トークン` +
       (d.note ? `\n   注記: ${d.note}` : ''),
   )

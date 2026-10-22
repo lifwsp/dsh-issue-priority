@@ -24,6 +24,8 @@ export interface JudgmentStore {
 export interface Judge {
   readonly available: boolean
   readonly provider: string
+  /** Model id actually answering (as reported by the API), or the configured one. */
+  readonly model?: string
   size(issue: IssueRecord, signal?: AbortSignal): Promise<SizeJudgment | null>
   priority(issue: IssueRecord, signal?: AbortSignal): Promise<PriorityJudgment | null>
   merge(a: IssueRecord, b: IssueRecord, signal?: AbortSignal): Promise<MergeJudgment | null>
@@ -119,6 +121,7 @@ function noulValue(answer: DecisionAnswer | undefined): number | null {
 export function createJudge(client: DecisionClient | null, store: JudgmentStore, providerLabel?: string): Judge {
   const usage: UsageTotals = { requests: 0, questions: 0, inputTokens: 0 }
   let lastError: string | undefined
+  let answeredBy: string | undefined
 
   async function ask(
     state: Record<string, unknown>,
@@ -131,6 +134,7 @@ export function createJudge(client: DecisionClient | null, store: JudgmentStore,
       usage.requests += 1
       usage.questions += Object.keys(questions).length
       usage.inputTokens += res.usage.input_tokens
+      if (res.model) answeredBy = res.model
       return res.answers
     } catch (error) {
       if (signal?.aborted) throw error
@@ -156,6 +160,9 @@ export function createJudge(client: DecisionClient | null, store: JudgmentStore,
       return client !== null
     },
     provider: providerLabel ?? client?.provider ?? 'none',
+    get model() {
+      return answeredBy ?? client?.model
+    },
     usage,
     get lastError() {
       return lastError
