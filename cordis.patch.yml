@@ -1,0 +1,5 @@
+# Bundle patch: register dsh-issue-priority.
+# Entry id matches the package name so the Plugins UI maps config ↔ this row.
+- insert:
+  - id: dsh-issue-priority
+    name: 'dsh-issue-priority'
