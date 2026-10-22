@@ -13,6 +13,15 @@
     "better-sidebar"
   ],
   "license": "MIT",
+  "author": "lifwsp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lifwsp/dsh-issue-priority.git"
+  },
+  "homepage": "https://github.com/lifwsp/dsh-issue-priority#readme",
+  "bugs": {
+    "url": "https://github.com/lifwsp/dsh-issue-priority/issues"
+  },
   "type": "module",
   "engines": {
     "dsh": ">=0.1.7",
