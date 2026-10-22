@@ -128,6 +128,8 @@ export function createJudge(client: DecisionClient | null, store: JudgmentStore,
   }
 
   const pairState = (a: IssueRecord, b: IssueRecord) => ({ A: issueState(a), B: issueState(b) })
+  // Answers are model-specific: a different provider/model must not reuse them.
+  const scope = `${client?.provider ?? 'none'}/${client?.model ?? ''}`
 
   return {
     get available() {
@@ -141,7 +143,7 @@ export function createJudge(client: DecisionClient | null, store: JudgmentStore,
 
     size(issue, signal) {
       const state = issueState(issue)
-      return cached(`size:${QUESTION_VERSION}:${issue.number}:${hash(state)}`, async () => {
+      return cached(`size:${QUESTION_VERSION}:${scope}:${issue.number}:${hash(state)}`, async () => {
         const answers = await ask(state, { size: SIZE_Q, actionable: ACTIONABLE_Q }, signal)
         if (!answers) return null
         const size = scoreToSize(answers.size)
@@ -154,7 +156,7 @@ export function createJudge(client: DecisionClient | null, store: JudgmentStore,
     merge(a, b, signal) {
       const [x, y] = a.number < b.number ? [a, b] : [b, a]
       const state = pairState(x, y)
-      return cached(`merge:${QUESTION_VERSION}:${x.number}-${y.number}:${hash(state)}`, async () => {
+      return cached(`merge:${QUESTION_VERSION}:${scope}:${x.number}-${y.number}:${hash(state)}`, async () => {
         const answers = await ask(state, { merge: MERGE_Q }, signal)
         const p = noulValue(answers?.merge)
         return p === null ? null : ({ p } satisfies MergeJudgment)
@@ -164,7 +166,7 @@ export function createJudge(client: DecisionClient | null, store: JudgmentStore,
     direction(a, b, signal) {
       const [x, y] = a.number < b.number ? [a, b] : [b, a]
       const state = pairState(x, y)
-      return cached(`direction:${QUESTION_VERSION}:${x.number}-${y.number}:${hash(state)}`, async () => {
+      return cached(`direction:${QUESTION_VERSION}:${scope}:${x.number}-${y.number}:${hash(state)}`, async () => {
         const answers = await ask(state, { order: DIRECTION_Q }, signal)
         const ans = answers?.order
         if (!ans || ans.type !== 'choice') return null

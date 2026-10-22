@@ -6,6 +6,7 @@ export interface PluginConfig {
   decisionProvider?: DecisionProviderId | 'none'
   decisionApiKeyRef?: string
   decisionModel?: string
+  decisionApiUrl?: string
   allowExternalJudgment?: boolean
   maxQuestionsPerSync?: number
   mergeThreshold?: number
@@ -27,18 +28,20 @@ export interface PluginConfig {
  * updates are re-read on the next sync without a plugin reload.
  */
 export const Config = Schema.object({
-  decisionProvider: Schema.union(['liquid' as const, 'openrouter' as const, 'none' as const])
+  decisionProvider: Schema.union(['liquid' as const, 'openrouter' as const, 'typesafe' as const, 'custom' as const, 'none' as const])
     .default('liquid')
     .description(
-      'Decision model route for LiquidAI d1. `liquid` = api.liquid.ai (LIQUID_API_KEY), ' +
-        '`openrouter` = openrouter.ai liquid/d1 (OPENROUTER_API_KEY), `none` = no model (deterministic only).',
+      'Decision model (System One API). `liquid` = api.liquid.ai d1 (LIQUID_API_KEY), ' +
+        '`openrouter` = liquid/d1 (OPENROUTER_API_KEY), `typesafe` = Jev (TYPESAFE_API_KEY), ' +
+        '`custom` = decisionApiUrl + decisionModel (DECISION_API_KEY), `none` = deterministic only.',
     )
     .volatile(),
   decisionApiKeyRef: Schema.string()
     .default('')
     .description('Credential / env name for the decision API key. Empty = LIQUID_API_KEY or OPENROUTER_API_KEY by provider.')
     .volatile(),
-  decisionModel: Schema.string().default('').description('Model id override. Empty = d1 / liquid/d1.').volatile(),
+  decisionModel: Schema.string().default('').description('Model id override. Empty = provider default (d1 / liquid/d1 / jev-1.14.0). Required for custom.').volatile(),
+  decisionApiUrl: Schema.string().default('').description('Endpoint override. Required for custom (POST, System One request shape).').volatile(),
   allowExternalJudgment: Schema.boolean()
     .default(false)
     .description(
@@ -52,7 +55,7 @@ export const Config = Schema.object({
   directionThreshold: Schema.number().min(0).max(1).default(0.6).description('Direction choice probability needed for an advisory order.').volatile(),
   maxPackageSize: Schema.natural().min(1).max(16).default(4).description('Max package size (S=1, M=2, L=4).').volatile(),
   syncIntervalMinutes: Schema.natural().min(0).max(1440).default(60).description('Background sync interval; 0 disables the timer.'),
-  maxIssues: Schema.natural().min(1).max(1000).default(300).description('Safety cap on issues fetched per sync.').volatile(),
+  maxIssues: Schema.natural().min(1).max(5000).default(300).description('Max open issues fetched per sync (most recently updated first). Raise for large backlogs; more issues = more GitHub requests and more decision questions on the first sync.').volatile(),
   githubTokenRef: Schema.string().default('GITHUB_TOKEN').description('Credential / env name for a GitHub token (value is never logged). Falls back to `gh auth token`.').volatile(),
   githubApiBase: Schema.string().default('https://api.github.com').description('GitHub API base URL.').volatile(),
   githubMaxRetries: Schema.natural().min(0).max(8).default(3).description('Retries on GitHub rate limit.').volatile(),
@@ -67,6 +70,7 @@ export const DEFAULTS: ResolvedConfig = {
   decisionProvider: 'liquid',
   decisionApiKeyRef: '',
   decisionModel: '',
+  decisionApiUrl: '',
   allowExternalJudgment: false,
   maxQuestionsPerSync: 200,
   mergeThreshold: 0.6,

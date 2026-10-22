@@ -50,10 +50,13 @@ acceptance: ログイン画面でエラーが表示される
 
 | キー | 既定 | 説明 |
 | --- | --- | --- |
-| `decisionProvider` | `liquid` | `liquid`（api.liquid.ai）/ `openrouter`（liquid/d1）/ `none` |
-| `decisionApiKeyRef` | `''` | 空なら `LIQUID_API_KEY` または `OPENROUTER_API_KEY` |
+| `decisionProvider` | `liquid` | `liquid`（d1）/ `openrouter`（liquid/d1）/ `typesafe`（Jev）/ `custom` / `none` |
+| `decisionModel` | `''` | モデル ID。空なら各プロバイダの既定（`custom` では必須） |
+| `decisionApiUrl` | `''` | エンドポイント。`custom` では必須（System One 互換の POST） |
+| `decisionApiKeyRef` | `''` | 空ならプロバイダごとに `LIQUID_API_KEY` / `OPENROUTER_API_KEY` / `TYPESAFE_API_KEY` / `DECISION_API_KEY` |
 | `allowExternalJudgment` | `false` | **true にしないと d1 に送りません**（Issue 本文が外部 API に送られるため） |
 | `syncIntervalMinutes` | `60` | 0 でタイマー無効 |
+| `maxIssues` | `300` | 1 回の同期で読む Open Issue の上限（更新が新しい順、最大 5000） |
 | `maxQuestionsPerSync` | `200` | 1 回の同期で d1 に聞く上限 |
 | `mergeThreshold` / `actionableThreshold` / `directionThreshold` | `0.6` / `0.35` / `0.6` | 判定のしきい値 |
 | `maxPackageSize` | `4` | パッケージの規模上限（S=1, M=2, L=4） |

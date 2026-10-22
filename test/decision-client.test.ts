@@ -24,4 +24,15 @@ describe('HttpDecisionClient', () => {
     expect(JSON.parse(String(init.body)).model).toBe('liquid/d1')
     expect(DecisionError).toBeTypeOf('function')
   })
+
+  it('supports typesafe and requires url+model for custom', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ answers: {} }), { status: 200 }))
+    const ts = new HttpDecisionClient({ provider: 'typesafe', apiKey: 'k', fetchImpl: fetchImpl as never })
+    expect(ts.model).toBe('jev-1.14.0')
+    await ts.ask({ state: 's', questions: { q: { type: 'noul', instructions: 'i' } } })
+    expect((fetchImpl.mock.calls[0] as unknown as [string])[0]).toBe('https://api.typesafe.ai/v1/systemone')
+    expect(() => new HttpDecisionClient({ provider: 'custom', apiKey: 'k' })).toThrow(DecisionError)
+    const c = new HttpDecisionClient({ provider: 'custom', apiKey: 'k', url: 'https://x.example/v1/systemone', model: 'm1' })
+    expect(c.model).toBe('m1')
+  })
 })

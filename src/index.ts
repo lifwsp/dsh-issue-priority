@@ -71,7 +71,8 @@ async function githubToken(ctx: AnyCtx, config: ResolvedConfig): Promise<string 
 
 function defaultKeyRef(config: ResolvedConfig): string {
   if (config.decisionApiKeyRef) return config.decisionApiKeyRef
-  return config.decisionProvider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'LIQUID_API_KEY'
+  const refs = { liquid: 'LIQUID_API_KEY', openrouter: 'OPENROUTER_API_KEY', typesafe: 'TYPESAFE_API_KEY', custom: 'DECISION_API_KEY', none: '' } as const
+  return refs[config.decisionProvider]
 }
 
 /** Returns a client, or a reason string why the model is off. */
@@ -81,12 +82,17 @@ async function decisionClient(ctx: AnyCtx, config: ResolvedConfig): Promise<Deci
   const ref = defaultKeyRef(config)
   const apiKey = await resolveSecret(ctx, ref)
   if (!apiKey) return `${ref} が未設定`
-  return new HttpDecisionClient({
-    provider: config.decisionProvider,
-    apiKey,
-    ...(config.decisionModel ? { model: config.decisionModel } : {}),
-    timeoutMs: config.decisionTimeoutMs,
-  })
+  try {
+    return new HttpDecisionClient({
+      provider: config.decisionProvider,
+      apiKey,
+      ...(config.decisionModel ? { model: config.decisionModel } : {}),
+      ...(config.decisionApiUrl ? { url: config.decisionApiUrl } : {}),
+      timeoutMs: config.decisionTimeoutMs,
+    })
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
 }
 
 /**

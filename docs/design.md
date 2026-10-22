@@ -176,7 +176,7 @@ worktree はオプション（既定オフ）。
 
 ## 10. 決定済みになった事項
 
-- **判定モデル**: LiquidAI d1（入力 \$0.02 / 1M トークン、出力無料）。jevcore-dsh は `jev-*` モデルしか通さないため、プラグイン内に専用クライアントを持つ。
+- **判定モデル**: 既定は LiquidAI d1。System One 形式（state + questions → answers）の API なら差し替え可能（`decisionProvider`: liquid / openrouter / typesafe / custom）。判定キャッシュはプロバイダ/モデル名を含むので、切り替えると再判定される。d1（入力 \$0.02 / 1M トークン、出力無料）。jevcore-dsh は `jev-*` モデルしか通さないため、プラグイン内に専用クライアントを持つ。
 - **依存 API**: REST。理由は §11。
 - **コマンド→エージェント**: `invocation.agent.followup(ユーザーメッセージ)` で着手指示を次ターンとして渡せる（dsh-command-goal と同じ手段）。
 

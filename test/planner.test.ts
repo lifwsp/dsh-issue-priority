@@ -104,6 +104,10 @@ describe('buildPlan', () => {
     // Second run with same inputs: answered from cache, zero new requests.
     await buildPlan(base({ issues, judge: judge() }))
     expect(client.requests.length).toBe(asked)
+    // Switching model invalidates cached answers.
+    const other = Object.assign(new FakeDecision(() => ({ type: 'noul', noul: 0.9 })), { model: 'other' })
+    await buildPlan(base({ issues, judge: createJudge(other, { get: (k) => judgments.get(k), set: (k, v) => judgments.set(k, v) }) }))
+    expect(other.requests.length).toBeGreaterThan(0)
   })
 
   it('flags unclear issues', async () => {

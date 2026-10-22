@@ -9,9 +9,11 @@
  * Endpoints:
  * - liquid:     POST https://api.liquid.ai/decisions/v1/systemone   (model "d1")
  * - openrouter: POST https://openrouter.ai/api/v1/systemone          (model "liquid/d1")
+ * - typesafe:   POST https://api.typesafe.ai/v1/systemone            (model "jev-1.14.0")
+ * - custom:     any System One–compatible URL + model
  */
 
-export type DecisionProviderId = 'liquid' | 'openrouter'
+export type DecisionProviderId = 'liquid' | 'openrouter' | 'typesafe' | 'custom'
 
 export type Entry = string | Record<string, unknown> | unknown[] | null
 
@@ -40,6 +42,8 @@ export interface DecisionRequest {
 /** Seam for tests and future providers. */
 export interface DecisionClient {
   readonly provider: string
+  /** Model id; part of the judgment cache key so switching models re-judges. */
+  readonly model?: string
   ask(request: DecisionRequest): Promise<DecisionResponse>
 }
 
@@ -57,6 +61,9 @@ export class DecisionError extends Error {
 const ENDPOINTS: Record<DecisionProviderId, { url: string; model: string }> = {
   liquid: { url: 'https://api.liquid.ai/decisions/v1/systemone', model: 'd1' },
   openrouter: { url: 'https://openrouter.ai/api/v1/systemone', model: 'liquid/d1' },
+  typesafe: { url: 'https://api.typesafe.ai/v1/systemone', model: 'jev-1.14.0' },
+  // Any System One–compatible endpoint; url and model must be supplied.
+  custom: { url: '', model: '' },
 }
 
 export interface HttpDecisionClientOptions {
@@ -101,8 +108,8 @@ function validateQuestions(questions: Record<string, DecisionQuestion>): void {
 
 export class HttpDecisionClient implements DecisionClient {
   readonly provider: string
+  readonly model: string
   private readonly url: string
-  private readonly model: string
   private readonly apiKey: string
   private readonly timeoutMs: number
   private readonly maxRetries: number
@@ -113,6 +120,9 @@ export class HttpDecisionClient implements DecisionClient {
     this.provider = options.provider
     this.url = options.url ?? endpoint.url
     this.model = options.model || endpoint.model
+    if (!this.url || !this.model) {
+      throw new DecisionError(`Decision provider "${options.provider}" needs both a URL and a model id`, 'invalid')
+    }
     this.apiKey = options.apiKey
     this.timeoutMs = options.timeoutMs ?? 15_000
     this.maxRetries = options.maxRetries ?? 2
