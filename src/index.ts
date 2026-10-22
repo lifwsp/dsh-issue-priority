@@ -6,7 +6,7 @@ import { Config, resolveLiveConfig, type ResolvedConfig } from './config.js'
 import { HttpDecisionClient, type DecisionClient } from './decision/client.js'
 import { RestGitHubAdapter } from './github/rest-adapter.js'
 import { createLogger, type Logger } from './log.js'
-import { createRpcHandler, RPC_CHANNEL } from './rpc.js'
+import { createRpcHandler, createRpcRoute, RPC_CHANNEL } from './rpc.js'
 import { IssuePlanRuntime } from './runtime.js'
 import { ISSUE_AUTHORING_SKILL, ISSUE_WORK_SKILL } from './skill.js'
 import { createFileStore, defaultDataDir } from './store.js'
@@ -121,18 +121,33 @@ function mountRpc(ctx: AnyCtx, runtime: IssuePlanRuntime, logger: Logger): void 
     logger.warn('ctx.inject unavailable; sidebar tab disabled')
     return
   }
-  ctx.inject(['connection', 'webServer'], (inner: AnyCtx) => {
-    const connection = inner.get('connection') as { rpc?: { handle?: (channel: string, h: unknown) => unknown } } | undefined
-    const rpc = connection?.rpc
-    if (!rpc || typeof rpc.handle !== 'function') {
-      logger.warn('connection.rpc.handle unavailable; sidebar tab disabled')
+  // Only `webServer` is required: on the desktop host `connection` is absent
+  // (dsh-run-button logs connection=false) and a nested inject on it never fires.
+  ctx.inject(['webServer'], (inner: AnyCtx) => {
+    const handler = (endpoint: string, payload: unknown, signal?: AbortSignal) => dispatch(endpoint, payload, signal)
+    const connection = inner.get('connection') as
+      | { rpc?: { handle?: (channel: string, h: unknown) => unknown }; requestRejection?: (req: unknown) => number | undefined }
+      | undefined
+    if (connection?.rpc && typeof connection.rpc.handle === 'function') {
+      try {
+        connection.rpc.handle(RPC_CHANNEL, handler)
+        logger.info('sidebar RPC channel mounted via connection.rpc', { channel: RPC_CHANNEL })
+        return
+      } catch (error) {
+        logger.warn('connection.rpc.handle failed; falling back to a direct route', { error: String(error) })
+      }
+    }
+    const webServer = inner.get('webServer') as { register?: (route: unknown) => unknown } | undefined
+    if (!webServer || typeof webServer.register !== 'function') {
+      logger.warn('webServer.register unavailable; sidebar tab disabled')
       return
     }
+    const route = createRpcRoute(handler, connection?.requestRejection?.bind(connection))
     try {
-      rpc.handle(RPC_CHANNEL, (endpoint: string, payload: unknown, signal?: AbortSignal) => dispatch(endpoint, payload, signal))
-      logger.info('sidebar RPC channel mounted', { channel: RPC_CHANNEL })
+      inner.effect(() => webServer.register!(route) as () => void, 'dsh-issue-priority: sidebar RPC route')
+      logger.info('sidebar RPC channel mounted as direct route', { channel: RPC_CHANNEL })
     } catch (error) {
-      logger.warn('sidebar RPC channel could not be mounted', { error: error instanceof Error ? error.message : String(error) })
+      logger.warn('sidebar RPC route could not be registered', { error: String(error) })
     }
   })
 }

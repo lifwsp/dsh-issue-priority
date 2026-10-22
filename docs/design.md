@@ -155,7 +155,7 @@ worktree はオプション（既定オフ）。
 ### 7.2a サイドバータブ（better-sidebar、任意）
 
 - client 半: `client/client.js`（手書き、ビルドなし。`react` だけをローダーから受け取る）。`ctx.betterSidebar.registerTab({ id: 'dsh-issue-priority:plan', single: true })`。サイドバーのサービスは後から来ることがあるので、1 秒間隔で 30 回まで登録をやり直す。apply は例外を外に出さない。
-- host 半: `src/rpc.ts`。`ctx.inject(['connection', 'webServer'], inner => inner.get('connection').rpc.handle('/dsh-issue-priority', …))`。handle は読んだ context の `webServer.register` で prefix ルートを張るので、`webServer` を inject した context で呼ばないと登録に失敗し、ブラウザーには SPA フォールバックの HTTP 405 が返る。endpoint は `plan` / `sync` / `override` / `done` / `next`。
+- host 半: `src/rpc.ts`。`ctx.inject(['webServer'], …)` の中で、`connection.rpc.handle('/dsh-issue-priority', …)` があればそれを使い、なければ `webServer.register` に prefix ルートを直接張る（DSH デスクトップには host 側の `connection` サービスがない。dsh-run-button も同じく直接ルートで動いている）。直接ルートはブラウザーの `connection.rpc.call` と同じ封筒（`client-request` → `server-response`）を話す。`connection` を inject 条件に入れると、デスクトップでは中身が一度も実行されず、ブラウザーには SPA フォールバックの HTTP 405 が返る。endpoint は `plan` / `sync` / `override` / `done` / `next`。
 - リポジトリの判定: `agents.list()` からタブの `scope.sessionId` に一致するエージェントを探し、その作業ディレクトリを使う。見つからなければ、タブが知らせる `scope.cwd` を使う。
 - 着手（`next`）: 一致したエージェントの `followup()` に、`/issues next` と同じ指示を渡す。エージェントが見つからないときは、エラーを返してコマンドの使用を案内する。
 - 表示中は 60 秒ごとに `plan` を呼ぶ（`ensurePlan` なので、5 分以内は保存済みの計画を返す）。

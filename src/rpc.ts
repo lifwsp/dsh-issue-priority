@@ -13,6 +13,9 @@ import type { Plan } from './types.js'
 
 export const RPC_CHANNEL = '/dsh-issue-priority'
 
+const ENDPOINT_SEGMENT = /^[A-Za-z0-9_$.-]+$/
+const MAX_REQUEST_BYTES = 1 << 20
+
 export type RpcResult =
   | { ok: true; value: unknown }
   | { ok: false; error: { code: string; message: string; details: Record<string, unknown> } }
@@ -172,5 +175,81 @@ class RpcError extends Error {
     message: string,
   ) {
     super(message)
+  }
+}
+
+type RawReq = AsyncIterable<Uint8Array> & { url?: string; method?: string; headers: Record<string, string | string[] | undefined> }
+type RawRes = { writeHead(status: number, headers?: Record<string, string>): unknown; end(body?: string): unknown }
+
+/**
+ * A `webServer.register` prefix route speaking the same envelope as
+ * `connection.rpc.call` in the browser ({type:'client-request', rpcId, method,
+ * payload} → {type:'server-response', rpcId, result}). Used when the host has no
+ * `connection` service (DSH desktop), mirroring dsh-run-button.
+ */
+export function createRpcRoute(
+  handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<RpcResult>,
+  requestRejection?: (req: unknown) => number | undefined,
+) {
+  const reply = (res: RawRes, rpcId: string, result: RpcResult) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ type: 'server-response', rpcId, result }))
+  }
+  return {
+    kind: 'prefix' as const,
+    path: RPC_CHANNEL,
+    handler: async (req: RawReq, res: RawRes) => {
+      if (requestRejection) {
+        const rejection = requestRejection(req)
+        if (rejection !== undefined) {
+          res.writeHead(rejection)
+          res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
+          return
+        }
+      }
+      const pathname = new URL(req.url ?? '/', 'http://dsh.internal').pathname
+      const endpoint = pathname.startsWith(`${RPC_CHANNEL}/`) ? pathname.slice(RPC_CHANNEL.length + 1) : ''
+      if (req.method !== 'POST' || !endpoint || !ENDPOINT_SEGMENT.test(endpoint)) {
+        res.writeHead(404)
+        res.end('not found')
+        return
+      }
+      const type = String(req.headers['content-type'] ?? '').split(';', 1)[0]!.trim().toLowerCase()
+      if (type !== 'application/json') {
+        res.writeHead(415)
+        res.end('content type must be application/json')
+        return
+      }
+      const chunks: Uint8Array[] = []
+      let bytes = 0
+      for await (const chunk of req) {
+        bytes += chunk.length
+        if (bytes > MAX_REQUEST_BYTES) {
+          res.writeHead(413)
+          res.end('request body too large')
+          return
+        }
+        chunks.push(chunk)
+      }
+      let value: any
+      try {
+        value = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      } catch {
+        res.writeHead(400)
+        res.end('body is not JSON')
+        return
+      }
+      const rpcId = typeof value?.rpcId === 'string' ? value.rpcId : 'invalid-request'
+      if (!value || typeof value !== 'object' || value.type !== 'client-request' || value.method !== endpoint) {
+        reply(res, rpcId, fail('gateway/bad-request', 'invalid client-request message'))
+        return
+      }
+      try {
+        reply(res, rpcId, await handler(endpoint, value.payload))
+      } catch (error) {
+        res.writeHead(500)
+        res.end(`handler failure: ${String(error)}`)
+      }
+    },
   }
 }

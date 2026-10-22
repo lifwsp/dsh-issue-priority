@@ -32,7 +32,7 @@ describe('plugin registration', () => {
     for (const d of disposers) d()
   })
 
-  it('mounts the sidebar RPC channel through a nested inject of connection + webServer', () => {
+  it('mounts the sidebar RPC channel via connection.rpc when present', () => {
     const handle = vi.fn(() => () => {})
     const injected: string[][] = []
     const inner = { get: (n: string) => (n === 'connection' ? { rpc: { handle } } : undefined) }
@@ -50,7 +50,25 @@ describe('plugin registration', () => {
       setTimeout: () => () => {},
     }
     apply(ctx as never, { logLevel: 'silent', dataDir: mkdtempSync(join(tmpdir(), 'dip-')) })
-    expect(injected).toEqual([['connection', 'webServer']])
+    expect(injected).toEqual([['webServer']])
     expect(handle).toHaveBeenCalledWith('/dsh-issue-priority', expect.any(Function))
+  })
+
+  it('falls back to a direct webServer route when connection is absent (DSH desktop)', () => {
+    const register = vi.fn(() => () => {})
+    const inner = { get: (n: string) => (n === 'webServer' ? { register } : undefined), effect: (fn: () => unknown) => fn() }
+    const ctx = {
+      tools: { register: () => () => {} },
+      commands: { register: () => () => {} },
+      skills: { register: () => () => {} },
+      effect: () => {},
+      get: () => undefined,
+      inject: (_deps: string[], fn: (c: unknown) => void) => fn(inner),
+      interval: () => () => {},
+      setTimeout: () => () => {},
+    }
+    apply(ctx as never, { logLevel: 'silent', dataDir: mkdtempSync(join(tmpdir(), 'dip-')) })
+    expect(register).toHaveBeenCalledOnce()
+    expect((register.mock.calls[0] as any)[0]).toMatchObject({ kind: 'prefix', path: '/dsh-issue-priority' })
   })
 })

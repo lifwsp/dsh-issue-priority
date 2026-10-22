@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createRpcHandler } from '../src/rpc.js'
+import { createRpcHandler, createRpcRoute } from '../src/rpc.js'
 import { IssuePlanRuntime } from '../src/runtime.js'
 import { createMemoryStore } from '../src/store.js'
 import { SyncService } from '../src/sync.js'
@@ -67,5 +67,26 @@ describe('sidebar RPC', () => {
     const runtime = new IssuePlanRuntime({ store, sync, logger: silentLogger, cwdOf: () => undefined, decisionStatus: async () => undefined })
     const dispatch = createRpcHandler({ runtime, agents: () => [] })
     expect(await dispatch('plan', {})).toMatchObject({ ok: false, error: { code: 'no-cwd' } })
+  })
+
+  it('direct route speaks the connection.rpc envelope', async () => {
+    const route = createRpcRoute(async (endpoint, payload) => ({ ok: true, value: { endpoint, payload } }))
+    const call = async (url: string, body: unknown, method = 'POST', ct = 'application/json') => {
+      let status = 0
+      let out = ''
+      const req = Object.assign(
+        (async function* () { yield Buffer.from(JSON.stringify(body)) })(),
+        { url, method, headers: { 'content-type': ct } },
+      )
+      await route.handler(req as never, { writeHead: (s: number) => { status = s }, end: (b?: string) => { out = b ?? '' } })
+      return { status, out }
+    }
+    const ok = await call('/dsh-issue-priority/plan', { type: 'client-request', rpcId: 'r1', method: 'plan', payload: { a: 1 } })
+    expect(ok.status).toBe(200)
+    expect(JSON.parse(ok.out)).toEqual({ type: 'server-response', rpcId: 'r1', result: { ok: true, value: { endpoint: 'plan', payload: { a: 1 } } } })
+    expect((await call('/dsh-issue-priority/plan', {}, 'GET')).status).toBe(404)
+    expect((await call('/dsh-issue-priority/plan', {}, 'POST', 'text/plain')).status).toBe(415)
+    const bad = await call('/dsh-issue-priority/plan', { type: 'client-request', rpcId: 'r2', method: 'sync' })
+    expect(JSON.parse(bad.out).result.ok).toBe(false)
   })
 })
